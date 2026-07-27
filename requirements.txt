@@ -1,0 +1,38 @@
+# ============================================================
+# 项目依赖清单（qwen —— 内网 AI 对话 + 自动化工具）
+# 生成方式：比对当前可运行 venv 的 pip freeze 与代码真实 import
+# 用法：pip install -r requirements.txt
+# 说明：以下为"直接依赖"（代码显式 import 的第三方库）；
+#       lxml / Pillow / pdfminer.six / pydantic 等为传递依赖，
+#       由下方包自动安装，无需手动列出。
+# 注意：python-docx / pdfplumber / jieba 在原 venv 中为函数内懒加载，
+#       原环境未安装会导致对应插件 ImportError，这里已补齐。
+# ============================================================
+
+# GUI（桌面窗口）
+PyQt5==5.15.11
+
+# OpenAI 兼容对话客户端（含 DeepSeek / Qwen 等）
+openai==2.36.0
+
+# SSH 远程操作插件（plugins/ssh_runner.py）
+paramiko==5.0.0
+
+# 文档 / 表格 / 演示生成插件
+python-pptx==1.0.2        # plugins/pptx.py  -> from pptx import ...
+openpyxl==3.1.5           # plugins/excel.py  -> import openpyxl
+xlsxwriter==3.2.9         # plugins/excel.py  -> import xlsxwriter
+python-docx>=1.1.0        # plugins/docx.py, plugins/knowledge_base.py -> from docx import ...
+pdfplumber>=0.11.0        # plugins/pdf.py, plugins/knowledge_base.py -> import pdfplumber
+jieba>=0.42.1             # plugins/knowledge_base.py -> import jieba（中文分词）
+
+# 代理支持：socks5 代理需要 socksio（http/https 代理无需额外依赖）
+socksio>=1.0.0
+
+# ----- 跨平台提示 -----
+# Windows：pip install -r requirements.txt 即可（PyQt5 自带 Qt 运行库）。
+# Linux：建议先装系统 Qt 库，例如
+#   sudo apt-get install -y python3-pyqt5  # 或
+#   sudo apt-get install -y qtbase5-dev
+# 再 pip install -r requirements.txt（若从源码编译 PyQt5）。
+# macOS：brew install qt@5 后 pip install -r requirements.txt。
