@@ -1,0 +1,42 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== IDE =====
+.idea/
+.vscode/
+
+# ===== 备份文件 =====
+*.bak
+
+# ===== 密钥与敏感配置（绝不提交） =====
+model_config.json
+db_connections.json
+ssh_connections.json
+
+# ===== 运行时数据（不含源码，避免泄露对话/任务/历史） =====
+automation_logs/
+automation_runs.json
+automations.json
+conversations/
+wf_out/
+novels/
+sub/
+worker_system/
+knowledge_base/
+
+# ===== 数据库文件 =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== 日志 =====
+*.log
+
+# ===== 个人运维脚本（含内网信息，公开仓库默认排除） =====
+*.sh
+
