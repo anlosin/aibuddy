@@ -1,0 +1,11 @@
+{
+  "model_id": "your-model-id",
+  "api_key": "YOUR_API_KEY_HERE",
+  "base_url": "https://your-endpoint/v1",
+  "enable_thinking": true,
+  "enable_tools": false,
+  "workspace_root": "",
+  "agent_mode": false,
+  "max_agent_rounds": 12,
+  "proxy": ""
+}
