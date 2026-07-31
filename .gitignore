@@ -37,6 +37,11 @@ knowledge_base/
 # ===== 日志 =====
 *.log
 
+# ===== 临时脚本与测试数据 =====
+_apipush.py
+_repro_*.py
+test_results_*
+
 # ===== 个人运维脚本（含内网信息，公开仓库默认排除） =====
 *.sh
 

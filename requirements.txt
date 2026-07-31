@@ -26,6 +26,10 @@ python-docx>=1.1.0        # plugins/docx.py, plugins/knowledge_base.py -> from d
 pdfplumber>=0.11.0        # plugins/pdf.py, plugins/knowledge_base.py -> import pdfplumber
 jieba>=0.42.1             # plugins/knowledge_base.py -> import jieba（中文分词）
 
+# 数据库助手插件（plugins/sql_helper.py）— 懒加载，按需安装
+# psycopg2-binary>=2.9    # PostgreSQL / GaussDB(openGauss)
+# mysql-connector-python>=8.0,<9  # MySQL / GaussDB(for MySQL) — 纯 Python 实现，无 C 扩展兼容问题
+
 # 代理支持：socks5 代理需要 socksio（http/https 代理无需额外依赖）
 socksio>=1.0.0
 

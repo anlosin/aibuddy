@@ -45,12 +45,9 @@ class ChatWindow(QMainWindow):
         self._load_convs()
         # ── 自动化调度器：常驻后台，每 30s 检查到期任务 ──
         self.scheduler = Scheduler(
-            client=self.client,
-            model_id=self.model_id,
+            parent=self,
             plugins=self.plugins,
             enabled_plugins=self.enabled_plugins,
-            enable_thinking=self.enable_thinking,
-            enable_tools=self.enable_tools,
             max_rounds=self.max_agent_rounds,
         )
         self._sched_timer = QTimer(self)
@@ -783,14 +780,14 @@ class ChatWindow(QMainWindow):
         settings_menu.addAction("模型设置...", self.show_settings)
         settings_menu.addAction("插件管理...", self.show_plugin_manager)
 
-        help_menu = menubar.addMenu("帮助")
-        help_menu.addAction("关于", self.show_about)
-
         # ── 自动化菜单（定时任务 + 按次记录结果）──
         auto_menu = menubar.addMenu("自动化")
         auto_menu.addAction("任务管理...", self.show_automation_manager)
         auto_menu.addAction("立即检查并执行到期任务",
                              lambda: self.scheduler.check_due())
+
+        help_menu = menubar.addMenu("帮助")
+        help_menu.addAction("关于", self.show_about)
 
     # ═══════════════════════════════════════════════
     #  复制快捷键绑定

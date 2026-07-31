@@ -80,10 +80,26 @@ def save_conversations(conversations, current_id):
 
 # ═══ 插件状态 ═══
 
+def _scan_plugins():
+    """扫描 plugins/ 目录，返回所有插件名（不含 __init__）"""
+    base = os.path.join(_project_dir(), "plugins")
+    names = []
+    try:
+        for f in sorted(os.listdir(base)):
+            if f.endswith(".py") and f not in ("__init__.py",):
+                names.append(f[:-3])
+    except Exception:
+        pass
+    return names
+
+
 def load_plugin_state():
-    """从配置中加载已启用插件列表"""
+    """从配置中加载已启用插件列表；如未配置则默认启用全部插件"""
     cfg = load_config()
-    return cfg.get("enabled_plugins", ["calculator", "clock"])
+    val = cfg.get("enabled_plugins")
+    if val is not None:
+        return val
+    return _scan_plugins()
 
 
 def save_plugin_state(enabled_plugins):

@@ -279,20 +279,52 @@ def dispatch_tool(plugins, enabled_names, tool_name, arguments):
 # ═════════════════════════════════════════
 
 class Scheduler:
-    def __init__(self, client, model_id, plugins, enabled_plugins,
-                 enable_thinking, enable_tools, max_rounds=12):
-        self.client = client
-        self.model_id = model_id
-        self.plugins = plugins
-        self.enabled_plugins = enabled_plugins
-        self.enable_thinking = enable_thinking
-        self.enable_tools = enable_tools
-        self.max_rounds = max_rounds
+    def __init__(self, parent=None, plugins=None, enabled_plugins=None,
+                 max_rounds=12, client=None, model_id=None,
+                 enable_thinking=False, enable_tools=False, **ignored):
+        # parent 是 ChatWindow 实例，运行时实时读取对话主模型的 client/model_id 等
+        self._parent = parent
+        # 无 parent 时（独立模式）直接存这些值
+        self._client = client
+        self._model_id = model_id
+        self._enable_thinking = enable_thinking
+        self._enable_tools = enable_tools
+        self._plugins = plugins or []
+        self._enabled_plugins = enabled_plugins or []
+        self._max_rounds = max_rounds
         self.automations = load_automations()
         self._running = set()
         self._lock = threading.Lock()
         self.on_log = None  # 可选回调(name, status)，GUI 用来刷新状态栏
         os.makedirs(LOG_DIR, exist_ok=True)
+
+    @property
+    def client(self):
+        return self._parent.client if self._parent else self._client
+
+    @property
+    def model_id(self):
+        return self._parent.model_id if self._parent else (self._model_id or "")
+
+    @property
+    def enable_thinking(self):
+        return self._parent.enable_thinking if self._parent else self._enable_thinking
+
+    @property
+    def enable_tools(self):
+        return self._parent.enable_tools if self._parent else self._enable_tools
+
+    @property
+    def plugins(self):
+        return self._plugins
+
+    @property
+    def enabled_plugins(self):
+        return self._enabled_plugins
+
+    @property
+    def max_rounds(self):
+        return self._max_rounds
 
     def check_due(self, now=None):
         """检查并启动所有到期任务。可在 QTimer 或阻塞循环中调用。"""
