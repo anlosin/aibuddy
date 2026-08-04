@@ -31,6 +31,32 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # 全局加固：Fusion 风格下，自定义白底 QSS 的 QComboBox 弹窗项在 hover/选中时
+    # 文字颜色未被显式定义会继承成透明（悬停即空白行）。此处统一给所有下拉弹窗
+    # 的 item 各状态定义深色文字 + 浅色背景，彻底杜绝该 bug。
+    app.setStyleSheet("""
+        QComboBox QAbstractItemView {
+            background: #FFFFFF;
+            border: 1px solid #E5E6EB;
+            border-radius: 6px;
+            outline: 0;
+            selection-background-color: #EEF1FF;
+            selection-color: #333;
+        }
+        QComboBox QAbstractItemView::item {
+            color: #333;
+            padding: 6px 12px;
+        }
+        QComboBox QAbstractItemView::item:selected {
+            color: #333;
+            background: #EEF1FF;
+        }
+        QComboBox QAbstractItemView::item:hover {
+            color: #333;
+            background: #F2F4F8;
+        }
+    """)
+
     font = app.font()
     font.setFamily("Microsoft YaHei")
     app.setFont(font)

@@ -18,8 +18,8 @@ def _scan_plugins():
 
 DEFAULT_CONFIG = {
     "model_id": "DeepSeek-R1-Distill-Qwen-32B",
-    "api_key": "6d6f5ebbafd04708943269625b204482",
-    "base_url": "https://wishub-x1.ctyun.cn/v1",
+    "api_key": "",   # ⚠️ 请通过 model_config.json 配置真实 API Key
+    "base_url": "",   # ⚠️ 请通过 model_config.json 配置 API 地址
     "enable_thinking": True,
     "enable_tools": False,
     "enabled_plugins": _scan_plugins(),

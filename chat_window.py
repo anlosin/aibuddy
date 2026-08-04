@@ -26,6 +26,8 @@ from tools import DEFAULT_CONFIG
 from plugin_manager import discover_plugins, get_enabled_tools, dispatch_tool, compare_versions, get_plugin_meta, get_system_prompts
 from compressor import ConversationCompressor
 from scheduler import Scheduler, describe_schedule, is_due
+from expert_router import (load_experts, match_expert, resolve_settings,
+                           build_system_prompt)
 
 
 class ChatWindow(QMainWindow):
@@ -41,6 +43,8 @@ class ChatWindow(QMainWindow):
         self._compressor: Optional[ConversationCompressor] = None
         self._load_settings()
         self._load_plugins()
+        self.experts = load_experts()
+        self.current_expert_id = self._load_current_expert()
         self.setup_client()
         self._load_convs()
         # ── 自动化调度器：常驻后台，每 30s 检查到期任务 ──
@@ -160,6 +164,9 @@ class ChatWindow(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
+
+        # ── 专家选择条 ──
+        self._setup_expert_bar(right_layout)
 
         self.chat_display = QTextEdit()
         self.chat_display.setFocusPolicy(Qt.NoFocus)
@@ -870,46 +877,118 @@ class ChatWindow(QMainWindow):
     #  消息发送
     # ═══════════════════════════════════════════════
 
-    def _build_tool_system_prompt(self):
-        """当启用工具调用或技能时，生成引导模型的 system prompt"""
-        if not self.enabled_plugins:
-            return None
-        from plugin_manager import get_enabled_tools, get_system_prompts
+    # ═══════════════════════════════════════════════
+    #  专家路由
+    # ═══════════════════════════════════════════════
 
-        # 收集技能提示词
-        skill_prompts = get_system_prompts(self.plugins, self.enabled_plugins)
+    def _load_current_expert(self):
+        """从配置读取当前专家，校验存在性，缺省 general"""
+        eid = load_config().get("current_expert", "general")
+        if eid not in self.experts:
+            eid = "general"
+        return eid
 
-        # 收集工具列表
-        tool_list = get_enabled_tools(self.plugins, self.enabled_plugins) if self.enable_tools else []
-        tool_names = [t["function"]["name"] for t in tool_list]
+    def _save_current_expert(self):
+        """持久化当前专家选择到 model_config.json"""
+        cfg = load_config()
+        cfg["current_expert"] = self.current_expert_id
+        save_config(cfg)
 
-        # 构建 system prompt
-        parts = []
-        if skill_prompts:
-            parts.append(skill_prompts)
+    def _populate_expert_combo(self):
+        """填充专家下拉框，并把当前项同步到已保存的 current_expert_id
 
-        if tool_names:
-            tool_part = (
-                "你可以调用以下工具来完成用户请求：\n"
-                + ", ".join(tool_names)
-                + "\n\n重要规则：\n"
-                "1. 当用户询问需要这些工具才能完成的任务时，你必须调用工具，而不是说你做不到。\n"
-                "2. 调用工具后，根据返回结果给用户一个友好的回复。\n"
-                "3. 不要在回复中说「我无法访问文件」「我没有这个能力」之类的话——你拥有这些工具。"
-            )
-            parts.append(tool_part)
+        注意：填充期间用 blockSignals 屏蔽信号，否则 addItem 首条会触发
+        currentTextChanged -> _on_expert_changed，把 current_expert_id 误写成
+        第一项（general）并持久化，导致每次重启都丢失用户已选专家。
+        """
+        self.expert_combo.blockSignals(True)
+        self.expert_combo.clear()
+        for eid, e in self.experts.items():
+            self.expert_combo.addItem(e.get("name", eid), eid)
+        idx = self.expert_combo.findData(self.current_expert_id)
+        if idx >= 0:
+            self.expert_combo.setCurrentIndex(idx)
+        self.expert_combo.blockSignals(False)
 
-        # 自主 / Agent 模式：鼓励多步规划与工具串联
-        if getattr(self, "agent_mode", False):
-            agent_part = (
-                "【自主模式已开启】对于复杂任务，你应该先拆解成多个子步骤，"
-                "主动连续调用多个工具直到任务完成，再把结果整理成清晰回复交给用户。"
-                "可优先使用 workflow_run 把多步任务编排成一个工作流。"
-                "遇到需要检索内部资料的情况优先用知识库(kb_search)，而非联网搜索。"
-            )
-            parts.append(agent_part)
+    def _on_expert_changed(self, _name):
+        """UI 手动切换专家"""
+        eid = self.expert_combo.currentData()
+        if eid:
+            self.current_expert_id = eid
+            self._save_current_expert()
+            e = self.experts.get(eid, {})
+            desc = e.get("description", "")
+            if desc:
+                self.display_message(
+                    "系统", f"已切换专家：{e.get('name', eid)} — {desc}", "system")
 
-        return "\n\n".join(parts) if parts else None
+    def _sync_expert_selector(self):
+        """把 current_expert_id 同步回下拉框（前缀路由后调用）"""
+        idx = self.expert_combo.findData(self.current_expert_id)
+        if idx >= 0:
+            self.expert_combo.setCurrentIndex(idx)
+
+    def _setup_expert_bar(self, right_layout):
+        """在聊天区顶部创建专家选择条"""
+        bar = QWidget()
+        bar.setObjectName("expertBar")
+        bar.setStyleSheet("""
+            QWidget#expertBar {
+                background-color: #F7F8FA;
+                border-bottom: 1px solid #E5E6EB;
+            }
+            QLabel#expertLabel {
+                font-size: 12px;
+                color: #666;
+            }
+            QComboBox#expertCombo {
+                border: 1px solid #E5E6EB;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 12px;
+                color: #333;
+                background: #FFFFFF;
+                min-height: 20px;
+            }
+            QComboBox#expertCombo:focus { border-color: #4E6EF2; }
+            QComboBox#expertCombo:on { border-color: #4E6EF2; }
+            QComboBox#expertCombo QAbstractItemView {
+                font-size: 12px;
+                background: #FFFFFF;
+                border: 1px solid #E5E6EB;
+                border-radius: 6px;
+                outline: 0;
+                selection-background-color: #EEF1FF;
+                selection-color: #333;
+            }
+            QComboBox#expertCombo QAbstractItemView::item {
+                color: #333;
+                padding: 6px 12px;
+            }
+            QComboBox#expertCombo QAbstractItemView::item:selected {
+                color: #333;
+                background: #EEF1FF;
+            }
+            QComboBox#expertCombo QAbstractItemView::item:hover {
+                color: #333;
+                background: #F2F4F8;
+            }
+        """)
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 6, 12, 6)
+        h.setSpacing(8)
+
+        label = QLabel("专家")
+        label.setObjectName("expertLabel")
+        self.expert_combo = QComboBox()
+        self.expert_combo.setObjectName("expertCombo")
+        self.expert_combo.setCursor(Qt.PointingHandCursor)
+        self._populate_expert_combo()
+        self.expert_combo.currentTextChanged.connect(self._on_expert_changed)
+
+        h.addWidget(label)
+        h.addWidget(self.expert_combo, 1)
+        right_layout.addWidget(bar)
 
     def _sanitize_messages(self, messages):
         """清理消息序列，确保 user/assistant 交替出现。
@@ -927,7 +1006,16 @@ class ChatWindow(QMainWindow):
 
     def on_send_message(self):
         user_input = self.input_field.text().strip()
+
+        # ── 专家前缀路由：/dev xxx 自动切换并剥离前缀 ──
+        matched_id, stripped = match_expert(user_input, self.experts)
+        if matched_id:
+            self.current_expert_id = matched_id
+            self._sync_expert_selector()
+            self._save_current_expert()
+        user_input = stripped or user_input
         if not user_input:
+            self.input_field.clear()
             return
 
         self.input_field.clear()
@@ -946,11 +1034,17 @@ class ChatWindow(QMainWindow):
         else:
             messages = [{"role": "user", "content": user_input}]
 
-        # 插入系统提示（技能指令 + 工具引导）
-        if self.enabled_plugins:
-            sp = self._build_tool_system_prompt()
+        # ── 构建 system prompt（专家优先，未指定则回退全局设置）──
+        expert = self.experts.get(self.current_expert_id, {})
+        ep, use_tools, use_thinking, rounds = resolve_settings(
+            expert, self.enabled_plugins, self.enable_tools,
+            self.enable_thinking, getattr(self, "agent_mode", False),
+            getattr(self, "max_agent_rounds", 5))
+        if ep or (expert.get("system_prompt") or "").strip():
+            agent_on = getattr(self, "agent_mode", False) and use_tools
+            sp = build_system_prompt(expert, self.plugins, ep, use_tools,
+                                     agent_mode=agent_on)
             if sp:
-                # 检查是否已有 system prompt，避免重复
                 has_system = any(m.get("role") == "system" for m in messages)
                 if not has_system:
                     messages.insert(0, {"role": "system", "content": sp})
@@ -969,13 +1063,11 @@ class ChatWindow(QMainWindow):
         self.stop_button.show()
         self.input_field.setEnabled(False)
 
-        # 自主模式使用更大的工具循环轮次，否则用默认 5 轮
-        rounds = self.max_agent_rounds if getattr(self, "agent_mode", False) else 5
         self.worker_thread = WorkerThread(self.client, self.model_id,
-                                          self.enable_thinking, self.enable_tools,
+                                          use_thinking, use_tools,
                                           messages,
                                           plugins=self.plugins,
-                                          enabled_plugins=self.enabled_plugins,
+                                          enabled_plugins=ep,
                                           max_rounds=rounds)
         self.worker_thread.chunk_received.connect(self.handle_chunk)
         self.worker_thread.response_complete.connect(self.handle_response_complete)
