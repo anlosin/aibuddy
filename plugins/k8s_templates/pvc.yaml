@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-app-data
+  namespace: production
+  labels:
+    app.kubernetes.io/name: my-app
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3          # 按集群实际 StorageClass 调整
+  resources:
+    requests:
+      storage: 10Gi

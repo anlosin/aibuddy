@@ -1,0 +1,11 @@
+{
+  "id": "general",
+  "name": "通用助手",
+  "description": "默认对话模式，无特殊约束，沿用全局插件与工具设置",
+  "trigger": "",
+  "system_prompt": "",
+  "enabled_plugins": null,
+  "enable_tools": null,
+  "enable_thinking": null,
+  "max_rounds": null
+}
