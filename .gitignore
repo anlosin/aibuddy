@@ -39,6 +39,8 @@ knowledge_base/
 
 # ===== 临时脚本与测试数据 =====
 _apipush.py
+_git_commit.py
+.git/tmp_index
 _repro_*.py
 test_results_*
 
