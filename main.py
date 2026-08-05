@@ -2,6 +2,11 @@
 import sys
 import os
 
+# 把项目根目录加入 sys.path，使 qwen_app 包可导入（直接 `python main.py` 也能跑）
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 # 抑制 libpng iCCP 警告（PyQt5 自带图标色彩配置不规范，不影响功能）
 import warnings
 warnings.filterwarnings("ignore", message=".*iCCP.*")
@@ -20,7 +25,7 @@ sys.stderr = _StderrFilter(sys.stderr)
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
-from chat_window import ChatWindow
+from qwen_app.chat_window import ChatWindow
 
 if __name__ == "__main__":
     if hasattr(Qt, 'AA_EnableHighDpiScaling'):

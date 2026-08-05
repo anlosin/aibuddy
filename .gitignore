@@ -26,7 +26,6 @@ conversations/
 wf_out/
 novels/
 sub/
-worker_system/
 knowledge_base/
 
 # ===== 数据库文件 =====
@@ -43,6 +42,8 @@ _git_commit.py
 .git/tmp_index
 _repro_*.py
 test_results_*
+scripts/push.py
+scripts/migrate_conversations.py
 
 # ===== 个人运维脚本（含内网信息，公开仓库默认排除） =====
 *.sh

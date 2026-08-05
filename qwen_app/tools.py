@@ -5,7 +5,8 @@ import os
 
 def _scan_plugins():
     """扫描 plugins/ 目录，返回所有插件名（不含 __init__）"""
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
+    # tools.py 现在位于 qwen_app/ 内，plugins/ 在项目根目录
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugins")
     names = []
     try:
         for f in sorted(os.listdir(base)):

@@ -19,14 +19,14 @@ from PyQt5.QtCore import Qt, QEvent, QPoint, QTimer, QDateTime, QTime, pyqtSigna
 from PyQt5.QtGui import QTextCharFormat, QColor, QTextCursor, QFont, QKeySequence
 from PyQt5.QtWidgets import QAction
 
-from worker import WorkerThread
-from config import load_config, save_config, load_conversations, save_conversations, load_plugin_state, save_plugin_state, make_openai_client
-from sanitizer import sanitize
-from tools import DEFAULT_CONFIG
-from plugin_manager import discover_plugins, get_enabled_tools, dispatch_tool, compare_versions, get_plugin_meta, get_system_prompts
-from compressor import ConversationCompressor
-from scheduler import Scheduler, describe_schedule, is_due
-from expert_router import (load_experts, match_expert, resolve_settings,
+from .worker import WorkerThread
+from .config import load_config, save_config, load_conversations, save_conversations, load_plugin_state, save_plugin_state, make_openai_client
+from .sanitizer import sanitize
+from .tools import DEFAULT_CONFIG
+from .plugin_manager import discover_plugins, get_enabled_tools, dispatch_tool, compare_versions, get_plugin_meta, get_system_prompts
+from .compressor import ConversationCompressor
+from .scheduler import Scheduler, describe_schedule, is_due
+from .expert_router import (load_experts, match_expert, resolve_settings,
                            build_system_prompt)
 
 

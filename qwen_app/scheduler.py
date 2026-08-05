@@ -24,12 +24,13 @@ import threading
 from datetime import datetime, timedelta
 
 # 模块级导入，供 run_automation / _build_system_prompt 共用
-from plugin_manager import get_enabled_tools, get_system_prompts, dispatch_tool
+from .plugin_manager import get_enabled_tools, get_system_prompts, dispatch_tool
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-AUTOMATIONS_FILE = os.path.join(PROJECT_DIR, "automations.json")
-RUNS_FILE = os.path.join(PROJECT_DIR, "automation_runs.json")
-LOG_DIR = os.path.join(PROJECT_DIR, "automation_logs")
+# scheduler.py 位于 qwen_app/ 内，运行时数据（automations.json 等）在项目根目录
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AUTOMATIONS_FILE = os.path.join(PROJECT_ROOT, "automations.json")
+RUNS_FILE = os.path.join(PROJECT_ROOT, "automation_runs.json")
+LOG_DIR = os.path.join(PROJECT_ROOT, "automation_logs")
 RUNS_INDEX_CAP = 300  # automation_runs.json 最多保留记录数
 
 
@@ -173,7 +174,7 @@ def describe_schedule(sched):
 # ═════════════════════════════════════════
 
 def _build_system_prompt(plugins, enabled_plugins, enable_tools):
-    from plugin_manager import get_enabled_tools, get_system_prompts
+    from .plugin_manager import get_enabled_tools, get_system_prompts
     parts = []
     sp = get_system_prompts(plugins, enabled_plugins)
     if sp:
@@ -270,7 +271,7 @@ def run_automation(auto, client, model_id, plugins, enabled_plugins,
 
 def dispatch_tool(plugins, enabled_names, tool_name, arguments):
     """复用 plugin_manager.dispatch_tool，避免重复实现"""
-    from plugin_manager import dispatch_tool as _dt
+    from .plugin_manager import dispatch_tool as _dt
     return _dt(plugins, enabled_names, tool_name, arguments)
 
 

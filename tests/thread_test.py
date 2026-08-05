@@ -1,11 +1,16 @@
 """
 线程安全测试
 """
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock
 from PyQt5.QtCore import QCoreApplication
 
-from worker_system import WorkerPool, AsyncWorker
+# 确保项目根目录在 sys.path 中，使 qwen_app 包可导入
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from qwen_app.worker_system import WorkerPool, AsyncWorker
 
 
 class ThreadTest(unittest.TestCase):

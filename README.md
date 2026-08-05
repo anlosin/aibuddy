@@ -61,20 +61,30 @@ python main.py
 启动自动化常驻服务（无 GUI，每 30 秒检查到期任务）：
 
 ```bash
-python scheduler_run.py
+python -m qwen_app.scheduler_run
 # 或交给系统 cron / 计划任务，每次只检查一次就退出：
-python scheduler_run.py --once
+python -m qwen_app.scheduler_run --once
 ```
 
 ## 目录结构
 
-- `chat_window.py` — 主窗口与界面逻辑
-- `worker.py` — 对话与工具调用工作线程
-- `config.py` / `tools.py` — 配置与默认值
-- `plugin_manager.py` — 插件发现与分发
-- `plugins/` — 各功能插件
-- `scheduler.py` / `scheduler_run.py` — 定时自动化核心与独立运行器
-- `compressor.py` — 对话历史压缩
+- `main.py` — 入口启动器（项目根目录，导入 `qwen_app` 包）
+- `qwen_app/` — 核心应用包
+  - `chat_window.py` — 主窗口与界面逻辑
+  - `worker.py` — 对话与工具调用工作线程
+  - `config.py` / `tools.py` — 配置、对话持久化与默认值
+  - `plugin_manager.py` — 插件发现与分发
+  - `scheduler.py` / `scheduler_run.py` — 定时自动化核心与独立运行器
+  - `expert_router.py` — 专家路由（声明式专家）
+  - `compressor.py` / `sanitizer.py` — 对话压缩与输入清洗
+  - `experts/` — 专家声明（`*.json`）
+  - `worker_system/` — 线程池 / 异步任务工具
+- `plugins/` — 各功能插件（顶层包，运行时数据经 `..` 指向项目根目录）
+- `scripts/` — 辅助脚本（`push.py` 推送、`migrate_conversations.py` 迁移）
+- `tests/` — 测试与压测脚本
+- `backups/` — 备份文件（`.bak`）
+- 运行时数据（均被 `.gitignore` 排除）：`model_config.json`、`conversations/`、
+  `automations.json`、`automation_logs/`、`knowledge_base/`、`novels/` 等
 
 ## 安全说明
 

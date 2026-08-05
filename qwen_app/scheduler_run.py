@@ -4,7 +4,7 @@
 并**按次记录每一次执行结果**。
 
 本脚本不依赖 PyQt5，适合在内网服务器上 24/7 常驻：
-    python scheduler_run.py
+    python -m qwen_app.scheduler_run
 或用系统计划任务 / systemd 定时拉起（配合 --once 单次检查后退出）。
 
 它会：
@@ -14,25 +14,26 @@
 4. 每次执行结果写入 automation_logs/<id>_<时间戳>.md 全文 + automation_runs.json 索引
 
 用法：
-    python scheduler_run.py              # 常驻，每 30s 检查
-    python scheduler_run.py --once     # 只检查一次到期任务就退出（配合外部 cron）
-    python scheduler_run.py --check     # 同 --once
+    python -m qwen_app.scheduler_run              # 常驻，每 30s 检查
+    python -m qwen_app.scheduler_run --once     # 只检查一次到期任务就退出（配合外部 cron）
+    python -m qwen_app.scheduler_run --check     # 同 --once
 """
 import os
 import sys
 import time
 import argparse
 
-# 让脚本可直接从项目根目录运行
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-if PROJECT_DIR not in sys.path:
-    sys.path.insert(0, PROJECT_DIR)
+# 让脚本可直接以 `python qwen_app/scheduler_run.py` 运行：
+# 把项目根目录加入 sys.path，使 qwen_app 包可导入。
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from datetime import datetime
 
-import config
-from plugin_manager import discover_plugins
-import scheduler
+import qwen_app.config as config
+from qwen_app.plugin_manager import discover_plugins
+import qwen_app.scheduler as scheduler
 
 
 def build_scheduler():

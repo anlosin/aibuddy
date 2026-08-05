@@ -8,11 +8,11 @@ import hashlib
 import copy
 
 
-def _project_dir():
-    return os.path.dirname(os.path.abspath(__file__))
+# plugin_manager.py 位于 qwen_app/ 内，plugins/ 在项目根目录
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-PLUGINS_DIR = os.path.join(_project_dir(), "plugins")
+PLUGINS_DIR = os.path.join(PROJECT_ROOT, "plugins")
 
 # ── 版本号比较 ──
 

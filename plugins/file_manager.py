@@ -38,7 +38,7 @@ PROTECTED_DIRS = {".venv", ".git", "node_modules", "__pycache__"}
 def _root():
     """工作区根目录：优先用配置里的 workspace_root，否则回退项目根目录"""
     try:
-        from config import load_config
+        from qwen_app.config import load_config
         cfg = load_config()
         root = cfg.get("workspace_root")
         if root and os.path.isdir(root):

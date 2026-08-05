@@ -46,8 +46,8 @@ def _do_run(args):
         return "错误: plan 必须是非空步骤列表"
 
     # 懒加载，避免插件发现阶段的导入副作用
-    from plugin_manager import discover_plugins, dispatch_tool
-    from config import load_plugin_state
+    from qwen_app.plugin_manager import discover_plugins, dispatch_tool
+    from qwen_app.config import load_plugin_state
 
     plugins, _ = discover_plugins()
     enabled = load_plugin_state()

@@ -109,7 +109,7 @@ def _safe_path(filepath):
         return filepath
     root = os.path.dirname(os.path.abspath(__file__))
     try:
-        from config import load_config
+        from qwen_app.config import load_config
         cfg = load_config()
         ws = cfg.get("workspace_root")
         if ws and os.path.isdir(ws):

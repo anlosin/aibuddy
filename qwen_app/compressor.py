@@ -25,7 +25,7 @@ class ConversationCompressor:
             proxy: 代理地址（为空=不走代理，仅作用于模型连接）
         """
         try:
-            from config import make_openai_client
+            from .config import make_openai_client
             self.client = make_openai_client(api_key, base_url, proxy)
         except ImportError:
             raise ImportError("需要安装 openai 库：pip install openai")

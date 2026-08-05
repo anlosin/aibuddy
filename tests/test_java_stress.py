@@ -28,7 +28,8 @@ import argparse
 from datetime import datetime
 
 # ── 复用项目配置 ──
-from config import load_config, make_openai_client
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from qwen_app.config import load_config, make_openai_client
 
 try:
     from openai import OpenAI

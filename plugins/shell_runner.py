@@ -62,7 +62,7 @@ OUTPUT_LIMIT = 6000  # 输出截断上限（字符）
 def _workspace_root():
     """读取配置的 workspace 根目录，缺省为项目目录"""
     try:
-        from config import load_config
+        from qwen_app.config import load_config
         cfg = load_config()
         root = cfg.get("workspace_root")
         if root and os.path.isdir(root):

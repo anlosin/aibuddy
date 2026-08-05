@@ -115,7 +115,7 @@ def build_system_prompt(expert, plugins, enabled_plugins, enable_tools,
     - 再叠加专家（或全局）启用插件的 SYSTEM_PROMPT 技能
     - 启用了工具则追加工具调用引导；开启 agent_mode 则追加自主编排引导
     """
-    from plugin_manager import get_system_prompts, get_enabled_tools
+    from .plugin_manager import get_system_prompts, get_enabled_tools
 
     parts = []
 
