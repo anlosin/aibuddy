@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import html
 import uuid
 import threading
 from datetime import datetime
@@ -40,6 +41,9 @@ class ChatWindow(QMainWindow):
         self.conversation_history = []
         self._raw_buffer = ""
         self._block_start_pos = None
+        self._cur_sender = ""
+        self._cur_tag = "ai"
+        self._cur_time = ""
         self._compressor: Optional[ConversationCompressor] = None
         self._load_settings()
         self._load_plugins()
@@ -79,55 +83,7 @@ class ChatWindow(QMainWindow):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(240)
-        sidebar.setStyleSheet("""
-            QFrame#sidebar {
-                background-color: #F7F8FA;
-                border-right: 1px solid #E5E6EB;
-            }
-            QPushButton#btnNewChat {
-                background-color: #FFFFFF;
-                border: 1px solid #E5E6EB;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-                color: #333;
-                text-align: left;
-            }
-            QPushButton#btnNewChat:hover {
-                background-color: #EEF2FF;
-                border-color: #4E6EF2;
-            }
-            QListWidget#convList {
-                border: none;
-                background: transparent;
-                font-size: 13px;
-                outline: none;
-                padding: 4px 4px;
-            }
-            QListWidget#convList::item {
-                background: transparent;
-                padding: 0px;
-                margin: 0px;
-            }
-            QLabel#sidebarTitle {
-                font-size: 14px;
-                font-weight: bold;
-                padding: 16px 16px 8px 16px;
-                color: #333;
-            }
-            QPushButton#btnConvMenu {
-                background: transparent;
-                border: none;
-                font-size: 14px;
-                color: #999;
-                padding: 4px 6px;
-                border-radius: 4px;
-            }
-            QPushButton#btnConvMenu:hover {
-                background-color: #E5E6EB;
-                color: #333;
-            }
-        """)
+        # 侧边栏（及全部界面）样式统一由 apply_theme() 注入
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -149,6 +105,12 @@ class ChatWindow(QMainWindow):
         sidebar_layout.addWidget(self.conv_list)
 
         bottom_bar = QHBoxLayout()
+        btn_theme = QPushButton("🌓")
+        btn_theme.setFlat(True)
+        btn_theme.setCursor(Qt.PointingHandCursor)
+        btn_theme.setToolTip("切换浅色 / 深色主题")
+        btn_theme.clicked.connect(self._toggle_theme)
+        bottom_bar.addWidget(btn_theme)
         btn_settings = QPushButton("⚙ 设置")
         btn_settings.setFlat(True)
         btn_settings.setCursor(Qt.PointingHandCursor)
@@ -169,16 +131,8 @@ class ChatWindow(QMainWindow):
         self._setup_expert_bar(right_layout)
 
         self.chat_display = QTextEdit()
+        self.chat_display.setObjectName("chatDisplay")
         self.chat_display.setFocusPolicy(Qt.NoFocus)
-        self.chat_display.setStyleSheet("""
-            QTextEdit {
-                font-family: "Microsoft YaHei";
-                font-size: 13px;
-                border: none;
-                background-color: #FFFFFF;
-                color: #333;
-            }
-        """)
         self.chat_display.installEventFilter(self)
         # 在 QApplication 级别安装事件过滤器，确保无论焦点在哪个 widget
         # 都能抢在 QLineEdit 等控件之前拦截 Ctrl+C 复制 chat_display 选中文本
@@ -187,53 +141,6 @@ class ChatWindow(QMainWindow):
 
         input_frame = QFrame()
         input_frame.setObjectName("inputFrame")
-        input_frame.setStyleSheet("""
-            QFrame#inputFrame {
-                background-color: #F7F8FA;
-                border-top: 1px solid #E5E6EB;
-            }
-            QLineEdit {
-                border: 1px solid #E5E6EB;
-                border-radius: 18px;
-                padding: 10px 16px;
-                font-size: 13px;
-                background: #FFFFFF;
-                min-height: 20px;
-            }
-            QLineEdit:focus {
-                border-color: #4E6EF2;
-            }
-            QPushButton#btnSend {
-                background-color: #4E6EF2;
-                color: white;
-                border: none;
-                border-radius: 18px;
-                padding: 10px 24px;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QPushButton#btnSend:hover {
-                background-color: #3B5BEF;
-            }
-            QPushButton#btnSend:pressed {
-                background-color: #2D4CD9;
-            }
-            QPushButton#btnSend:disabled {
-                background-color: #B0B8D0;
-            }
-            QPushButton#btnStop {
-                background-color: #E04848;
-                color: white;
-                border: none;
-                border-radius: 18px;
-                padding: 10px 24px;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QPushButton#btnStop:hover {
-                background-color: #CC3333;
-            }
-        """)
         input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(16, 12, 16, 12)
         input_layout.setSpacing(10)
@@ -269,6 +176,9 @@ class ChatWindow(QMainWindow):
 
         self.create_menu()
         self._setup_copy_handler()
+
+        # 注入主题（浅色 / 深色）样式；聊天内容由下方按会话加载渲染
+        self.apply_theme(rerender_chat=False)
 
         if not self.conversations:
             self.new_conversation()
@@ -310,6 +220,7 @@ class ChatWindow(QMainWindow):
         self._refresh_conv_list()
 
     def _refresh_conv_list(self):
+        pal = self._palette()
         self.conv_list.clear()
         for conv in self.conversations:
             cid = conv["id"]
@@ -319,10 +230,11 @@ class ChatWindow(QMainWindow):
             # 行容器
             row_widget = QWidget()
             row_widget.setObjectName(f"convRow_{cid}")
-            bg_color = "#D6E4FF" if selected else "transparent"
+            bg_color = pal["conv_sel"] if selected else "transparent"
+            hover_color = pal["conv_sel"] if selected else pal["conv_hover"]
             row_widget.setStyleSheet(
                 f"QWidget#{row_widget.objectName()} {{ background-color: {bg_color}; border-radius: 6px; }}"
-                f"QWidget#{row_widget.objectName()}:hover {{ background-color: {'#D6E4FF' if selected else '#EEF2FF'}; }}"
+                f"QWidget#{row_widget.objectName()}:hover {{ background-color: {hover_color}; }}"
             )
 
             row_layout = QHBoxLayout(row_widget)
@@ -331,7 +243,7 @@ class ChatWindow(QMainWindow):
 
             # 标题标签
             label = QLabel()
-            label.setStyleSheet("background: transparent; font-size: 13px; color: #333;")
+            label.setStyleSheet(f"background: transparent; font-size: 13px; color: {pal['conv_fg']};")
             label.setCursor(Qt.PointingHandCursor)
             label.setWordWrap(False)
             # 关键：允许收缩，不被长文本的 minimumSizeHint 撑开
@@ -375,7 +287,7 @@ class ChatWindow(QMainWindow):
         for msg in self.conversation_history:
             role = "您" if msg["role"] == "user" else self.model_id
             tag = "user" if msg["role"] == "user" else "ai"
-            self.display_message(role, msg["content"], tag)
+            self.display_message(role, msg["content"], tag, msg.get("time"))
         self.update_status()
 
     def _save_current_to_conv(self):
@@ -501,6 +413,7 @@ class ChatWindow(QMainWindow):
         self.agent_mode = cfg.get("agent_mode", DEFAULT_CONFIG["agent_mode"])
         self.max_agent_rounds = cfg.get("max_agent_rounds", DEFAULT_CONFIG["max_agent_rounds"])
         self.proxy = cfg.get("proxy", DEFAULT_CONFIG.get("proxy", ""))
+        self.theme = cfg.get("ui_theme", "light")
 
     def _save_settings(self):
         save_config({
@@ -513,6 +426,7 @@ class ChatWindow(QMainWindow):
             "agent_mode": self.agent_mode,
             "max_agent_rounds": self.max_agent_rounds,
             "proxy": self.proxy,
+            "ui_theme": self.theme,
         })
 
     def _pick_workspace(self, line_edit):
@@ -581,6 +495,12 @@ class ChatWindow(QMainWindow):
         layout.addRow("", chk_agent)
         layout.addRow("自主模式轮次:", sp_rounds)
 
+        # ── 界面主题 ──
+        le_theme = QComboBox()
+        le_theme.addItems(["浅色", "深色"])
+        le_theme.setCurrentText("浅色" if self.theme == "light" else "深色")
+        layout.addRow("界面主题:", le_theme)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
@@ -596,6 +516,7 @@ class ChatWindow(QMainWindow):
         new_agent = chk_agent.isChecked()
         new_rounds = sp_rounds.value()
         new_proxy = le_proxy.text().strip() if chk_proxy.isChecked() else ""
+        new_theme = "light" if le_theme.currentText() == "浅色" else "dark"
 
         if not new_url or not new_key or not new_model:
             QMessageBox.warning(self, "提示", "Base URL、API Key 和模型ID 不能为空")
@@ -608,6 +529,7 @@ class ChatWindow(QMainWindow):
                          or chk_tools.isChecked() != self.enable_tools)
         changed = model_changed or new_ws != (self.workspace_root or "") \
             or new_agent != self.agent_mode or new_rounds != self.max_agent_rounds
+        theme_changed = new_theme != self.theme
 
         self.base_url = new_url
         self.api_key = new_key
@@ -618,10 +540,14 @@ class ChatWindow(QMainWindow):
         self.workspace_root = new_ws
         self.agent_mode = new_agent
         self.max_agent_rounds = new_rounds
+        self.theme = new_theme
         self._save_settings()
 
         if model_changed:
             self.setup_client()
+
+        if theme_changed:
+            self.apply_theme(rerender_chat=True)
 
         self.display_message("系统",
             f"设置已更新 — 模型: {self.model_id} | 思考: {'开' if self.enable_thinking else '关'} | 工具: {'开' if self.enable_tools else '关'}",
@@ -932,48 +858,6 @@ class ChatWindow(QMainWindow):
         """在聊天区顶部创建专家选择条"""
         bar = QWidget()
         bar.setObjectName("expertBar")
-        bar.setStyleSheet("""
-            QWidget#expertBar {
-                background-color: #F7F8FA;
-                border-bottom: 1px solid #E5E6EB;
-            }
-            QLabel#expertLabel {
-                font-size: 12px;
-                color: #666;
-            }
-            QComboBox#expertCombo {
-                border: 1px solid #E5E6EB;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-size: 12px;
-                color: #333;
-                background: #FFFFFF;
-                min-height: 20px;
-            }
-            QComboBox#expertCombo:focus { border-color: #4E6EF2; }
-            QComboBox#expertCombo:on { border-color: #4E6EF2; }
-            QComboBox#expertCombo QAbstractItemView {
-                font-size: 12px;
-                background: #FFFFFF;
-                border: 1px solid #E5E6EB;
-                border-radius: 6px;
-                outline: 0;
-                selection-background-color: #EEF1FF;
-                selection-color: #333;
-            }
-            QComboBox#expertCombo QAbstractItemView::item {
-                color: #333;
-                padding: 6px 12px;
-            }
-            QComboBox#expertCombo QAbstractItemView::item:selected {
-                color: #333;
-                background: #EEF1FF;
-            }
-            QComboBox#expertCombo QAbstractItemView::item:hover {
-                color: #333;
-                background: #F2F4F8;
-            }
-        """)
         h = QHBoxLayout(bar)
         h.setContentsMargins(12, 6, 12, 6)
         h.setSpacing(8)
@@ -1019,15 +903,16 @@ class ChatWindow(QMainWindow):
             return
 
         self.input_field.clear()
-        self.display_message("您", user_input, "user")
+        now = datetime.now().strftime("%H:%M")
+        self.display_message("您", user_input, "user", now)
 
         if self.enable_context:
             # 防御：如果最后一条已经是 user（上次请求失败无 assistant 回复），
             # 用新消息替换，避免连续 user 消息导致 API 500 错误
             if self.conversation_history and self.conversation_history[-1].get("role") == "user":
-                self.conversation_history[-1] = {"role": "user", "content": user_input}
+                self.conversation_history[-1] = {"role": "user", "content": user_input, "time": now}
             else:
-                self.conversation_history.append({"role": "user", "content": user_input})
+                self.conversation_history.append({"role": "user", "content": user_input, "time": now})
             # 清理消息序列中任何连续 user 消息（历史数据修复）
             self.conversation_history = self._sanitize_messages(self.conversation_history)
             messages = list(self.conversation_history)
@@ -1129,19 +1014,19 @@ class ChatWindow(QMainWindow):
     # ── 消息块 ──
 
     def _start_message_block(self, sender, tag):
+        now = datetime.now().strftime("%H:%M")
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
         if cursor.position() > 0:
-            cursor.insertText("\n", QTextCharFormat())
-        fmt = self._get_format(tag)
-        sender_fmt = QTextCharFormat(fmt)
-        sender_fmt.setFontWeight(QFont.Bold)
-        cursor.insertText(f"{sender}: ", sender_fmt)
+            cursor.insertHtml("<br>")
         self._block_start_pos = cursor.position()
+        self._cur_sender = sender
+        self._cur_tag = tag
+        self._cur_time = now
         self._raw_buffer = ""
 
     def _rerender_block(self, tag):
-        if not hasattr(self, "_block_start_pos") or self._block_start_pos is None:
+        if self._block_start_pos is None:
             return
         cursor = self.chat_display.textCursor()
         cursor.setPosition(self._block_start_pos)
@@ -1149,7 +1034,8 @@ class ChatWindow(QMainWindow):
         cursor.removeSelectedText()
         clean = sanitize(self._raw_buffer)
         if clean:
-            cursor.insertText(clean, self._get_format(tag))
+            cursor.insertHtml(self._build_bubble(
+                self._cur_sender, clean, tag, self._cur_time))
         self._scroll_to_bottom()
 
     def _append_text(self, text, tag):
@@ -1168,7 +1054,10 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "_raw_buffer") and self._raw_buffer:
             self._rerender_block(self.current_tag or "ai")
         if self.enable_context and full_response:
-            self.conversation_history.append({"role": "assistant", "content": full_response})
+            self.conversation_history.append({
+                "role": "assistant", "content": full_response,
+                "time": getattr(self, "_cur_time", datetime.now().strftime("%H:%M")),
+            })
         self.current_tag = None
         self._block_start_pos = None
         self._raw_buffer = ""
@@ -1184,19 +1073,205 @@ class ChatWindow(QMainWindow):
             if self.conversation_history[-1].get("role") == "user":
                 self.conversation_history.pop()
 
-    def display_message(self, sender, message, tag=None):
+    # ═══════════════════════════════════════════════
+    #  主题 & 气泡渲染（QQ 风格）
+    # ═══════════════════════════════════════════════
+
+    def _palette(self):
+        """返回当前主题下的配色（用于气泡与列表）。"""
+        if self.theme == "dark":
+            return {
+                "chat_bg": "#161616",
+                "ai_bubble": "#2A2A2A", "ai_fg": "#E8E8E8",
+                "user_bubble": "#2F7D5B", "user_fg": "#FFFFFF",
+                "tool_bg": "#3A3020", "tool_fg": "#E0C089",
+                "sys_bg": "#2A2A2A", "sys_fg": "#9A9A9A",
+                "err_bg": "#3A1F1F", "err_fg": "#FF9A9A",
+                "think_bg": "#242424", "think_fg": "#9A9A9A",
+                "avatar_ai": "#4E6EF2", "avatar_user": "#23B36B",
+                "avatar_tool": "#E0913A", "avatar_think": "#7A7FB0",
+                "ts_fg": "#777777",
+                "conv_sel": "#34406B", "conv_hover": "#2A2E38", "conv_fg": "#E5E5E5",
+            }
+        return {
+            "chat_bg": "#F5F5F7",
+            "ai_bubble": "#FFFFFF", "ai_fg": "#1F1F1F",
+            "user_bubble": "#95EC69", "user_fg": "#1A1A1A",
+            "tool_bg": "#FFF7E6", "tool_fg": "#9A6B1A",
+            "sys_bg": "#EDEFF2", "sys_fg": "#8A8F99",
+            "err_bg": "#FDECEC", "err_fg": "#D93025",
+            "think_bg": "#F0F1F3", "think_fg": "#8A8F99",
+            "avatar_ai": "#4E6EF2", "avatar_user": "#23B36B",
+            "avatar_tool": "#E0913A", "avatar_think": "#9AA0C0",
+            "ts_fg": "#B0B4BD",
+            "conv_sel": "#D6E4FF", "conv_hover": "#EEF2FF", "conv_fg": "#333333",
+        }
+
+    def _theme_qss(self, theme):
+        """返回整套界面 QSS（浅色 / 深色）。"""
+        if theme == "dark":
+            return """
+            QMainWindow { background-color: #1A1A1A; }
+            QFrame#sidebar { background-color: #202020; border-right: 1px solid #2C2C2C; }
+            QPushButton#btnNewChat { background-color: #2A2A2A; border: 1px solid #3A3A3A; border-radius: 8px; padding: 8px 16px; font-size: 13px; color: #E5E5E5; text-align: left; }
+            QPushButton#btnNewChat:hover { background-color: #2F3350; border-color: #4E6EF2; }
+            QListWidget#convList { border: none; background: transparent; font-size: 13px; outline: none; padding: 4px 4px; }
+            QListWidget#convList::item { background: transparent; padding: 0px; margin: 0px; }
+            QLabel#sidebarTitle { font-size: 14px; font-weight: bold; padding: 16px 16px 8px 16px; color: #E5E5E5; }
+            QPushButton#btnConvMenu { background: transparent; border: none; font-size: 14px; color: #888888; padding: 4px 6px; border-radius: 4px; }
+            QPushButton#btnConvMenu:hover { background-color: #333333; color: #E5E5E5; }
+            QFrame#inputFrame { background-color: #1A1A1A; border-top: 1px solid #2C2C2C; }
+            QLineEdit { border: 1px solid #3A3A3A; border-radius: 18px; padding: 10px 16px; font-size: 13px; background: #262626; min-height: 20px; color: #E5E5E5; }
+            QLineEdit:focus { border-color: #4E6EF2; }
+            QPushButton#btnSend { background-color: #4E6EF2; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
+            QPushButton#btnSend:hover { background-color: #3B5BEF; }
+            QPushButton#btnSend:pressed { background-color: #2D4CD9; }
+            QPushButton#btnSend:disabled { background-color: #3A3F55; }
+            QPushButton#btnStop { background-color: #E04848; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
+            QPushButton#btnStop:hover { background-color: #CC3333; }
+            QWidget#expertBar { background-color: #1E1E1E; border-bottom: 1px solid #2C2C2C; }
+            QLabel#expertLabel { font-size: 12px; color: #AAAAAA; }
+            QComboBox#expertCombo { border: 1px solid #3A3A3A; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #E5E5E5; background: #262626; min-height: 20px; }
+            QComboBox#expertCombo:focus { border-color: #4E6EF2; }
+            QComboBox#expertCombo:on { border-color: #4E6EF2; }
+            QComboBox#expertCombo QAbstractItemView { font-size: 12px; background: #262626; border: 1px solid #3A3A3A; border-radius: 6px; outline: 0; selection-background-color: #34406B; selection-color: #E5E5E5; }
+            QComboBox#expertCombo QAbstractItemView::item { color: #E5E5E5; padding: 6px 12px; }
+            QComboBox#expertCombo QAbstractItemView::item:selected { color: #E5E5E5; background: #34406B; }
+            QComboBox#expertCombo QAbstractItemView::item:hover { color: #E5E5E5; background: #2E3340; }
+            QTextEdit#chatDisplay { font-family: 'Microsoft YaHei'; font-size: 13px; border: none; background-color: #161616; color: #E8E8E8; }
+            QStatusBar { background: #1A1A1A; color: #AAAAAA; }
+            QStatusBar::item { border: none; }
+            QMenu { background-color: #262626; border: 1px solid #3A3A3A; border-radius: 6px; padding: 4px; }
+            QMenu::item { padding: 8px 24px; font-size: 13px; color: #E5E5E5; }
+            QMenu::item:selected { background-color: #34406B; border-radius: 4px; }
+            """
+        return """
+            QMainWindow { background-color: #FFFFFF; }
+            QFrame#sidebar { background-color: #F7F8FA; border-right: 1px solid #E5E6EB; }
+            QPushButton#btnNewChat { background-color: #FFFFFF; border: 1px solid #E5E6EB; border-radius: 8px; padding: 8px 16px; font-size: 13px; color: #333333; text-align: left; }
+            QPushButton#btnNewChat:hover { background-color: #EEF2FF; border-color: #4E6EF2; }
+            QListWidget#convList { border: none; background: transparent; font-size: 13px; outline: none; padding: 4px 4px; }
+            QListWidget#convList::item { background: transparent; padding: 0px; margin: 0px; }
+            QLabel#sidebarTitle { font-size: 14px; font-weight: bold; padding: 16px 16px 8px 16px; color: #333333; }
+            QPushButton#btnConvMenu { background: transparent; border: none; font-size: 14px; color: #999999; padding: 4px 6px; border-radius: 4px; }
+            QPushButton#btnConvMenu:hover { background-color: #E5E6EB; color: #333333; }
+            QFrame#inputFrame { background-color: #F7F8FA; border-top: 1px solid #E5E6EB; }
+            QLineEdit { border: 1px solid #E5E6EB; border-radius: 18px; padding: 10px 16px; font-size: 13px; background: #FFFFFF; min-height: 20px; color: #333333; }
+            QLineEdit:focus { border-color: #4E6EF2; }
+            QPushButton#btnSend { background-color: #4E6EF2; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
+            QPushButton#btnSend:hover { background-color: #3B5BEF; }
+            QPushButton#btnSend:pressed { background-color: #2D4CD9; }
+            QPushButton#btnSend:disabled { background-color: #B0B8D0; }
+            QPushButton#btnStop { background-color: #E04848; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
+            QPushButton#btnStop:hover { background-color: #CC3333; }
+            QWidget#expertBar { background-color: #F7F8FA; border-bottom: 1px solid #E5E6EB; }
+            QLabel#expertLabel { font-size: 12px; color: #666666; }
+            QComboBox#expertCombo { border: 1px solid #E5E6EB; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #333333; background: #FFFFFF; min-height: 20px; }
+            QComboBox#expertCombo:focus { border-color: #4E6EF2; }
+            QComboBox#expertCombo:on { border-color: #4E6EF2; }
+            QComboBox#expertCombo QAbstractItemView { font-size: 12px; background: #FFFFFF; border: 1px solid #E5E6EB; border-radius: 6px; outline: 0; selection-background-color: #EEF1FF; selection-color: #333333; }
+            QComboBox#expertCombo QAbstractItemView::item { color: #333333; padding: 6px 12px; }
+            QComboBox#expertCombo QAbstractItemView::item:selected { color: #333333; background: #EEF1FF; }
+            QComboBox#expertCombo QAbstractItemView::item:hover { color: #333333; background: #F2F4F8; }
+            QTextEdit#chatDisplay { font-family: 'Microsoft YaHei'; font-size: 13px; border: none; background-color: #F5F5F7; color: #1F1F1F; }
+            QStatusBar { background: #F7F8FA; color: #666666; }
+            QStatusBar::item { border: none; }
+            QMenu { background-color: #FFFFFF; border: 1px solid #E5E6EB; border-radius: 6px; padding: 4px; }
+            QMenu::item { padding: 8px 24px; font-size: 13px; color: #333333; }
+            QMenu::item:selected { background-color: #EEF2FF; border-radius: 4px; }
+            """
+
+    def apply_theme(self, rerender_chat=True):
+        """应用浅色 / 深色主题：注入 QSS，并按需重渲染会话列表与聊天气泡。"""
+        self.setStyleSheet(self._theme_qss(self.theme))
+        self.status_label.setStyleSheet(
+            f"color: {self._palette()['ts_fg']}; padding: 0 8px;")
+        self._refresh_conv_list()
+        if rerender_chat:
+            self._load_current_conv()
+
+    def _toggle_theme(self):
+        """侧边栏 🌓 按钮：在浅色 / 深色之间切换并持久化。"""
+        self.theme = "dark" if self.theme == "light" else "light"
+        self._save_settings()
+        self.apply_theme(rerender_chat=True)
+
+    def _avatar_td(self, bg, icon):
+        return (f'<td width="36" align="center" style="vertical-align:top;">'
+                f'<div style="width:34px;height:34px;border-radius:17px;'
+                f'background:{bg};color:#ffffff;text-align:center;'
+                f'font-size:18px;line-height:34px;">{icon}</div></td>')
+
+    def _build_bubble(self, sender, text, tag, time_str):
+        p = self._palette()
+        esc = html.escape(text).replace("\n", "<br>")
+        ts_fg = p["ts_fg"]
+        mono = 'font-family:"Consolas","Courier New",monospace;font-size:12px;'
+        spacer = '<td width="10%"></td>'
+
+        if tag == "user":
+            bubble = ('<td width="72%" align="right" style="background:{ub};'
+                      'color:{uf};border-radius:16px;padding:9px 13px;'
+                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;">{esc}</td>'
+                      ).format(ub=p["user_bubble"], uf=p["user_fg"], esc=esc)
+            av = self._avatar_td(p["avatar_user"], "🧑")
+            row = f'<tr>{spacer}{bubble}{av}</tr>'
+        elif tag == "tool":
+            bubble = ('<td width="72%" align="left" style="background:{tb};'
+                      'color:{tf};border-radius:12px;padding:8px 12px;{mono}'
+                      'line-height:1.5;">{esc}</td>'
+                      ).format(tb=p["tool_bg"], tf=p["tool_fg"], mono=mono, esc=esc)
+            av = self._avatar_td(p["avatar_tool"], "🔧")
+            row = f'<tr>{av}{bubble}{spacer}</tr>'
+        elif tag == "thinking":
+            bubble = ('<td width="72%" align="left" style="background:{kb};'
+                      'color:{kf};border-radius:14px;padding:9px 13px;'
+                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;'
+                      'font-style:italic;">{esc}</td>'
+                      ).format(kb=p["think_bg"], kf=p["think_fg"], esc=esc)
+            av = self._avatar_td(p["avatar_think"], "💭")
+            row = f'<tr>{av}{bubble}{spacer}</tr>'
+        elif tag == "error":
+            bubble = ('<td width="80%" align="left" style="background:{eb};'
+                      'color:{ef};border-radius:12px;padding:8px 12px;'
+                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.5;">{esc}</td>'
+                      ).format(eb=p["err_bg"], ef=p["err_fg"], esc=esc)
+            row = f'<tr>{spacer}{bubble}<td width="10%"></td></tr>'
+        elif tag == "system":
+            # 系统提示：时间戳 + 居中胶囊，整行放入单一表格
+            return (f'<table width="100%" cellpadding="3" cellspacing="0">'
+                    f'<tr><td align="center" style="color:{ts_fg};font-size:11px;'
+                    f'font-family:"Microsoft YaHei";padding:4px 0 2px 0;">{time_str}</td></tr>'
+                    f'<tr><td align="center"><span style="background:{p["sys_bg"]};'
+                    f'color:{p["sys_fg"]};padding:3px 12px;border-radius:10px;'
+                    f'font-size:12px;font-family:"Microsoft YaHei";">{esc}</span></td></tr>'
+                    f'</table>')
+        else:  # 默认：AI 回复（左侧，机器人头像）
+            bubble = ('<td width="72%" align="left" style="background:{ab};'
+                      'color:{af};border-radius:16px;padding:9px 13px;'
+                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;">{esc}</td>'
+                      ).format(ab=p["ai_bubble"], af=p["ai_fg"], esc=esc)
+            av = self._avatar_td(p["avatar_ai"], "🤖")
+            row = f'<tr>{av}{bubble}{spacer}</tr>'
+
+        # 时间戳作为表格首行，用 <td align="center"> 承载（Qt 可靠居中）
+        return (f'<table width="100%" cellpadding="3" cellspacing="0">'
+                f'<tr><td align="center" colspan="3" style="color:{ts_fg};'
+                f'font-size:11px;font-family:"Microsoft YaHei";'
+                f'padding:6px 0 2px 0;">{time_str}</td></tr>'
+                f'{row}</table>')
+
+    def display_message(self, sender, message, tag=None, time_str=None):
         message = sanitize(message)
         if not message:
             return
+        if not time_str:
+            time_str = datetime.now().strftime("%H:%M")
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
         if cursor.position() > 0:
-            cursor.insertText("\n", QTextCharFormat())
-        fmt = self._get_format(tag)
-        sender_fmt = QTextCharFormat(fmt)
-        sender_fmt.setFontWeight(QFont.Bold)
-        cursor.insertText(f"{sender}: ", sender_fmt)
-        cursor.insertText(message, fmt)
+            cursor.insertHtml("<br>")
+        cursor.insertHtml(self._build_bubble(sender, message, tag or "ai", time_str))
         self._scroll_to_bottom()
         self.current_tag = None
 
