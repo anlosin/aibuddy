@@ -29,6 +29,15 @@ from .compressor import ConversationCompressor
 from .scheduler import Scheduler, describe_schedule, is_due
 from .expert_router import (load_experts, match_expert, resolve_settings,
                            build_system_prompt)
+from .automation_dialogs import (AutomationManagerDialog, AutomationEditDialog,
+                                 LogViewDialog)
+from .theme import (apply_theme_to_window, build_bubble, get_palette)
+from .session import (get_current_conv, new_conversation, on_conv_selected,
+                      refresh_conv_list, load_current_conv, save_current_to_conv,
+                      load_convs, save_convs, select_conv_by_id, show_conv_menu,
+                      rename_conversation, delete_conversation)
+from .settings_dialog import (show_settings, show_plugin_manager,
+                              reload_plugins)
 
 
 class ChatWindow(QMainWindow):
@@ -50,7 +59,7 @@ class ChatWindow(QMainWindow):
         self.experts = load_experts()
         self.current_expert_id = self._load_current_expert()
         self.setup_client()
-        self._load_convs()
+        load_convs(self)
         # ── 自动化调度器：常驻后台，每 30s 检查到期任务 ──
         self.scheduler = Scheduler(
             parent=self,
@@ -95,13 +104,17 @@ class ChatWindow(QMainWindow):
         btn_new = QPushButton("＋ 新建")
         btn_new.setObjectName("btnNewChat")
         btn_new.setCursor(Qt.PointingHandCursor)
-        btn_new.clicked.connect(self.new_conversation)
+        btn_new.clicked.connect(lambda: new_conversation(self))
         title_bar.addWidget(btn_new)
         sidebar_layout.addLayout(title_bar)
 
         self.conv_list = QListWidget()
         self.conv_list.setObjectName("convList")
-        self.conv_list.itemClicked.connect(self.on_conv_selected)
+        self.conv_list.itemClicked.connect(lambda item: on_conv_selected(self, item))
+        # 强制关闭横向滚动条：标题已 elide 截断，绝不出现左右滚动
+        self.conv_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 视口宽度变化(首次 show/窗口 resize/滚动条出现)时重建行宽，保证 ⋯ 按钮完整可见
+        self.conv_list.installEventFilter(self)
         sidebar_layout.addWidget(self.conv_list)
 
         bottom_bar = QHBoxLayout()
@@ -114,7 +127,7 @@ class ChatWindow(QMainWindow):
         btn_settings = QPushButton("⚙ 设置")
         btn_settings.setFlat(True)
         btn_settings.setCursor(Qt.PointingHandCursor)
-        btn_settings.clicked.connect(self.show_settings)
+        btn_settings.clicked.connect(lambda: show_settings(self))
         bottom_bar.addWidget(btn_settings)
         bottom_bar.addStretch()
         sidebar_layout.addLayout(bottom_bar)
@@ -181,208 +194,10 @@ class ChatWindow(QMainWindow):
         self.apply_theme(rerender_chat=False)
 
         if not self.conversations:
-            self.new_conversation()
+            new_conversation(self)
         else:
-            self._refresh_conv_list()
-            self._load_current_conv()
-
-    # ═══════════════════════════════════════════════
-    #  对话管理
-    # ═══════════════════════════════════════════════
-
-    def _get_current_conv(self):
-        for c in self.conversations:
-            if c["id"] == self.current_conv_id:
-                return c
-        return None
-
-    def new_conversation(self):
-        conv = {
-            "id": str(uuid.uuid4())[:8],
-            "title": "新对话",
-            "history": [],
-            "created_at": datetime.now().isoformat(),
-        }
-        self.conversations.insert(0, conv)
-        self.current_conv_id = conv["id"]
-        self._save_convs()
-        self._refresh_conv_list()
-        self._load_current_conv()
-        self.input_field.setFocus()
-
-    def on_conv_selected(self, item):
-        conv_id = item.data(Qt.UserRole)
-        if conv_id == self.current_conv_id:
-            return
-        self._save_current_to_conv()
-        self.current_conv_id = conv_id
-        self._load_current_conv()
-        self._refresh_conv_list()
-
-    def _refresh_conv_list(self):
-        pal = self._palette()
-        self.conv_list.clear()
-        for conv in self.conversations:
-            cid = conv["id"]
-            title = conv.get("title", "新对话")
-            selected = cid == self.current_conv_id
-
-            # 行容器
-            row_widget = QWidget()
-            row_widget.setObjectName(f"convRow_{cid}")
-            bg_color = pal["conv_sel"] if selected else "transparent"
-            hover_color = pal["conv_sel"] if selected else pal["conv_hover"]
-            row_widget.setStyleSheet(
-                f"QWidget#{row_widget.objectName()} {{ background-color: {bg_color}; border-radius: 6px; }}"
-                f"QWidget#{row_widget.objectName()}:hover {{ background-color: {hover_color}; }}"
-            )
-
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(10, 8, 6, 8)
-            row_layout.setSpacing(4)
-
-            # 标题标签
-            label = QLabel()
-            label.setStyleSheet(f"background: transparent; font-size: 13px; color: {pal['conv_fg']};")
-            label.setCursor(Qt.PointingHandCursor)
-            label.setWordWrap(False)
-            # 关键：允许收缩，不被长文本的 minimumSizeHint 撑开
-            label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            label.setMinimumWidth(0)
-            label.setToolTip(title)  # 鼠标悬停显示完整标题
-            # 截断过长标题，显示省略号（sidebar 240px，按钮区约 50px，留 170px 给标题）
-            fm = label.fontMetrics()
-            full_text = f"💬 {title}"
-            elided = fm.elidedText(full_text, Qt.ElideRight, 170)
-            label.setText(elided)
-            label.mousePressEvent = lambda e, cid=cid: self._select_conv_by_id(cid)
-            row_layout.addWidget(label, 1)
-
-            # "⋯" 按钮
-            btn = QPushButton("⋯")
-            btn.setObjectName("btnConvMenu")
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedSize(28, 28)
-            btn.clicked.connect(lambda checked, cid=cid, title=title, btn=btn:
-                                self._show_conv_menu(cid, title, btn))
-            row_layout.addWidget(btn)
-
-            # 放入 QListWidget
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, cid)
-            item.setSizeHint(row_widget.sizeHint())
-            self.conv_list.addItem(item)
-            self.conv_list.setItemWidget(item, row_widget)
-            if selected:
-                item.setSelected(True)
-
-    def _load_current_conv(self):
-        conv = self._get_current_conv()
-        self.chat_display.clear()
-        self.current_tag = None
-        self.conversation_history = []
-        if not conv:
-            return
-        self.conversation_history = list(conv.get("history", []))
-        for msg in self.conversation_history:
-            role = "您" if msg["role"] == "user" else self.model_id
-            tag = "user" if msg["role"] == "user" else "ai"
-            self.display_message(role, msg["content"], tag, msg.get("time"))
-        self.update_status()
-
-    def _save_current_to_conv(self):
-        conv = self._get_current_conv()
-        if conv:
-            conv["history"] = list(self.conversation_history)
-            if not conv.get("title") or conv["title"] == "新对话":
-                for m in self.conversation_history:
-                    if m["role"] == "user":
-                        conv["title"] = m["content"][:30] + ("..." if len(m["content"]) > 30 else "")
-                        break
-            self._save_convs()
-            self._refresh_conv_list()
-
-    def _load_convs(self):
-        self.conversations, self.current_conv_id = load_conversations()
-
-    def _save_convs(self):
-        save_conversations(self.conversations, self.current_conv_id)
-
-    def _select_conv_by_id(self, conv_id):
-        """点击会话标签时切换对话"""
-        if conv_id == self.current_conv_id:
-            return
-        self._save_current_to_conv()
-        self.current_conv_id = conv_id
-        self._load_current_conv()
-        self._refresh_conv_list()
-
-    def _show_conv_menu(self, conv_id, title, button):
-        """显示会话的 ⋯ 菜单"""
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #FFFFFF;
-                border: 1px solid #E5E6EB;
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 8px 24px;
-                font-size: 13px;
-                color: #333;
-            }
-            QMenu::item:selected {
-                background-color: #EEF2FF;
-                border-radius: 4px;
-            }
-        """)
-        rename_action = menu.addAction("✏ 重命名")
-        menu.addSeparator()
-        delete_action = menu.addAction("🗑 删除会话")
-        delete_action.setData(conv_id)
-        # 弹出菜单在按钮下方
-        chosen = menu.exec_(button.mapToGlobal(QPoint(0, button.height())))
-
-        if chosen == rename_action:
-            self._rename_conversation(conv_id, title)
-        elif chosen == delete_action:
-            self._delete_conversation(conv_id)
-
-    def _rename_conversation(self, conv_id, old_title):
-        """重命名会话"""
-        new_title, ok = QInputDialog.getText(
-            self, "重命名会话", "请输入新名称：",
-            text=old_title
-        )
-        if ok and new_title.strip():
-            for conv in self.conversations:
-                if conv["id"] == conv_id:
-                    conv["title"] = new_title.strip()
-                    break
-            self._save_convs()
-            self._refresh_conv_list()
-
-    def _delete_conversation(self, conv_id):
-        """删除会话"""
-        reply = QMessageBox.question(
-            self, "确认", "确定要删除这个会话吗？\n此操作不可撤销。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-        self.conversations = [c for c in self.conversations if c["id"] != conv_id]
-        # 如果删的是当前对话，切换到第一个
-        if conv_id == self.current_conv_id:
-            if self.conversations:
-                self.current_conv_id = self.conversations[0]["id"]
-            else:
-                self.new_conversation()
-                return
-        self._save_convs()
-        self._load_current_conv()
-        self._refresh_conv_list()
-        self.display_message("系统", "会话已删除", "system")
+            refresh_conv_list(self)
+            load_current_conv(self)
 
     # ═══════════════════════════════════════════════
     #  客户端 & 设置
@@ -436,269 +251,10 @@ class ChatWindow(QMainWindow):
         if path:
             line_edit.setText(path)
 
-    def show_settings(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("模型设置")
-        dlg.resize(480, 320)
-        layout = QFormLayout(dlg)
-
-        le_url = QLineEdit(self.base_url)
-        le_url.setPlaceholderText("https://api.openai.com/v1")
-        le_key = QLineEdit(self.api_key)
-        le_key.setEchoMode(QLineEdit.Password)
-        le_key.setPlaceholderText("sk-...")
-        le_model = QLineEdit(self.model_id)
-        le_model.setPlaceholderText("gpt-4o / DeepSeek-R1-Distill-Qwen-32B")
-        chk_think = QCheckBox("启用思考模式 (enable_thinking)")
-        chk_think.setChecked(self.enable_thinking)
-        chk_tools = QCheckBox("启用工具调用 (计算器、时间查询等)")
-        chk_tools.setChecked(self.enable_tools)
-        chk_tools.setToolTip("需要模型支持 function calling / tool use 功能。\n如模型不支持，请关闭此选项。")
-
-        # ── 工作区根目录 ──
-        ws_layout = QHBoxLayout()
-        le_ws = QLineEdit(self.workspace_root or "")
-        le_ws.setPlaceholderText("留空=程序所在目录")
-        btn_ws = QPushButton("选择...")
-        btn_ws.clicked.connect(
-            lambda: self._pick_workspace(le_ws))
-        ws_layout.addWidget(le_ws)
-        ws_layout.addWidget(btn_ws)
-
-        # ── 自主 / Agent 模式 ──
-        chk_agent = QCheckBox("自主模式 (提高工具循环轮次，支持多步任务编排)")
-        chk_agent.setChecked(self.agent_mode)
-        chk_agent.setToolTip("开启后，模型可执行更多轮工具调用（如先检索再执行再整理），"
-                             "适合复杂自动化任务。注意会增加 token 消耗。")
-        sp_rounds = QSpinBox()
-        sp_rounds.setRange(3, 30)
-        sp_rounds.setValue(self.max_agent_rounds)
-        sp_rounds.setSuffix(" 轮")
-
-        layout.addRow("Base URL:", le_url)
-        layout.addRow("API Key:", le_key)
-        layout.addRow("模型ID:", le_model)
-
-        # ── 代理设置（仅作用于模型连接）──
-        le_proxy = QLineEdit(self.proxy or "")
-        le_proxy.setPlaceholderText("http://127.0.0.1:7890 或 socks5://127.0.0.1:7890（留空=不走代理）")
-        chk_proxy = QCheckBox("通过代理连接模型地址（仅作用于模型 API，不影响插件/SSH）")
-        chk_proxy.setChecked(bool(self.proxy))
-        chk_proxy.setToolTip("公司内网需经代理访问模型服务时填写。\n该代理只注入模型客户端，"
-                             "插件自身的 HTTP/SSH 等连接不受影响。")
-        layout.addRow("代理地址:", le_proxy)
-        layout.addRow("", chk_proxy)
-
-        layout.addRow("", chk_think)
-        layout.addRow("", chk_tools)
-        layout.addRow("工作区根目录:", ws_layout)
-        layout.addRow("", chk_agent)
-        layout.addRow("自主模式轮次:", sp_rounds)
-
-        # ── 界面主题 ──
-        le_theme = QComboBox()
-        le_theme.addItems(["浅色", "深色"])
-        le_theme.setCurrentText("浅色" if self.theme == "light" else "深色")
-        layout.addRow("界面主题:", le_theme)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        layout.addRow(buttons)
-
-        if dlg.exec_() != QDialog.Accepted:
-            return
-
-        new_url = le_url.text().strip()
-        new_key = le_key.text().strip()
-        new_model = le_model.text().strip()
-        new_ws = le_ws.text().strip()
-        new_agent = chk_agent.isChecked()
-        new_rounds = sp_rounds.value()
-        new_proxy = le_proxy.text().strip() if chk_proxy.isChecked() else ""
-        new_theme = "light" if le_theme.currentText() == "浅色" else "dark"
-
-        if not new_url or not new_key or not new_model:
-            QMessageBox.warning(self, "提示", "Base URL、API Key 和模型ID 不能为空")
-            return
-
-        model_changed = (new_url != self.base_url or new_key != self.api_key
-                         or new_model != self.model_id
-                         or new_proxy != (self.proxy or "")
-                         or chk_think.isChecked() != self.enable_thinking
-                         or chk_tools.isChecked() != self.enable_tools)
-        changed = model_changed or new_ws != (self.workspace_root or "") \
-            or new_agent != self.agent_mode or new_rounds != self.max_agent_rounds
-        theme_changed = new_theme != self.theme
-
-        self.base_url = new_url
-        self.api_key = new_key
-        self.model_id = new_model
-        self.proxy = new_proxy
-        self.enable_thinking = chk_think.isChecked()
-        self.enable_tools = chk_tools.isChecked()
-        self.workspace_root = new_ws
-        self.agent_mode = new_agent
-        self.max_agent_rounds = new_rounds
-        self.theme = new_theme
-        self._save_settings()
-
-        if model_changed:
-            self.setup_client()
-
-        if theme_changed:
-            self.apply_theme(rerender_chat=True)
-
-        self.display_message("系统",
-            f"设置已更新 — 模型: {self.model_id} | 思考: {'开' if self.enable_thinking else '关'} | 工具: {'开' if self.enable_tools else '关'}",
-            "system")
-
-    def show_plugin_manager(self):
-        """插件管理对话框 — 含版本信息、升级提示、热加载"""
-        dlg = QDialog(self)
-        dlg.setWindowTitle("插件管理")
-        dlg.resize(550, 460)
-        layout = QVBoxLayout(dlg)
-
-        # ── 顶部说明 ──
-        info_label = QLabel("勾选启用/禁用插件。替换 .py 文件后点击「重新加载」即可热更新，无需重启。")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-
-        # ── 插件列表 ──
-        list_widget = QListWidget()
-
-        # 扫描元信息（不加载模块，避免热加载冲突）
-        metas = get_plugin_meta()
-
-        for pname in sorted(metas.keys()):
-            meta = metas[pname]
-            # 当前已加载的版本（如果已加载）
-            loaded_ver = self.plugin_infos.get(pname, {}).get("version", "")
-            file_ver = meta["version"]
-            is_loaded = pname in self.plugins
-
-            # 版本比较
-            if loaded_ver and file_ver and compare_versions(file_ver, loaded_ver) > 0:
-                hint = " [文件版本更新，可重新加载]"
-            elif not is_loaded:
-                hint = " [未加载，点击重新加载]"
-            else:
-                hint = ""
-
-            # 插件类型
-            mod = self.plugins.get(pname)
-            if mod:
-                has_tools = hasattr(mod, "TOOLS") and hasattr(mod, "execute") and getattr(mod, "TOOLS", [])
-                has_skill = hasattr(mod, "SYSTEM_PROMPT") and getattr(mod, "SYSTEM_PROMPT", "").strip()
-                if has_tools and has_skill:
-                    tag = " [🔧 工具 + 📋 技能]"
-                elif has_tools:
-                    tag = " [🔧 工具]"
-                elif has_skill:
-                    tag = " [📋 技能]"
-                else:
-                    tag = ""
-            else:
-                tag = ""
-
-            label_text = (
-                f"{pname}  v{file_ver}{tag}"
-                f"{hint}\n"
-                f"  {meta['description']}  ({meta['size_kb']}KB)"
-            )
-
-            item = QListWidgetItem(label_text)
-            item.setData(Qt.UserRole, pname)
-            item.setCheckState(
-                Qt.Checked if pname in self.enabled_plugins else Qt.Unchecked
-            )
-            list_widget.addItem(item)
-
-        layout.addWidget(list_widget)
-
-        # ── 按钮行 ──
-        btn_layout = QHBoxLayout()
-        btn_reload = QPushButton("🔄 重新加载插件")
-        btn_reload.setToolTip("从磁盘重新加载所有插件，替换文件后无需重启程序")
-        btn_reload.setCursor(Qt.PointingHandCursor)
-        btn_reload.clicked.connect(lambda: self._reload_plugins(list_widget, dlg))
-        btn_layout.addWidget(btn_reload)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-
-        # ── 底部按钮 ──
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        layout.addWidget(buttons)
-
-        if dlg.exec_() != QDialog.Accepted:
-            return
-
-        new_enabled = []
-        for i in range(list_widget.count()):
-            item = list_widget.item(i)
-            pname = item.data(Qt.UserRole)
-            if item.checkState() == Qt.Checked:
-                new_enabled.append(pname)
-
-        self.enabled_plugins = new_enabled
-        save_plugin_state(self.enabled_plugins)
-
-        self.display_message("系统",
-            f"插件状态已更新 — 启用: {', '.join(self.enabled_plugins) if self.enabled_plugins else '无'}",
-            "system")
-
-    def _reload_plugins(self, list_widget, dlg):
-        """热加载：从磁盘重新扫描并加载所有插件"""
-        self.plugins, self.plugin_infos = discover_plugins(reload_modules=True)
-        display_message = getattr(self, "display_message", None)
-
-        # 刷新列表
-        list_widget.clear()
-        metas = get_plugin_meta()
-        for pname in sorted(metas.keys()):
-            meta = metas[pname]
-            is_ok = pname in self.plugins
-            status = "" if is_ok else " [加载失败]"
-
-            # 插件类型
-            mod = self.plugins.get(pname)
-            if mod:
-                has_tools = hasattr(mod, "TOOLS") and hasattr(mod, "execute") and getattr(mod, "TOOLS", [])
-                has_skill = hasattr(mod, "SYSTEM_PROMPT") and getattr(mod, "SYSTEM_PROMPT", "").strip()
-                if has_tools and has_skill:
-                    tag = " [🔧 工具 + 📋 技能]"
-                elif has_tools:
-                    tag = " [🔧 工具]"
-                elif has_skill:
-                    tag = " [📋 技能]"
-                else:
-                    tag = ""
-            else:
-                tag = ""
-
-            label_text = (
-                f"{pname}  v{meta['version']}{tag}{status}\n"
-                f"  {meta['description']}  ({meta['size_kb']}KB)"
-            )
-            item = QListWidgetItem(label_text)
-            item.setData(Qt.UserRole, pname)
-            item.setCheckState(
-                Qt.Checked if pname in self.enabled_plugins else Qt.Unchecked
-            )
-            list_widget.addItem(item)
-
-        if display_message:
-            display_message("系统",
-                f"插件已重新加载 — 共 {len(self.plugins)} 个",
-                "system")
-
     def create_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("文件")
-        file_menu.addAction("新建对话", self.new_conversation, "Ctrl+N")
+        file_menu.addAction("新建对话", lambda: new_conversation(self), "Ctrl+N")
         file_menu.addAction("导出对话", self.export_conversation, "Ctrl+S")
         file_menu.addAction("导入对话", self.import_conversation, "Ctrl+O")
         file_menu.addSeparator()
@@ -710,8 +266,8 @@ class ChatWindow(QMainWindow):
         edit_menu.addAction("切换上下文记忆", self.toggle_context, "Ctrl+T")
 
         settings_menu = menubar.addMenu("设置")
-        settings_menu.addAction("模型设置...", self.show_settings)
-        settings_menu.addAction("插件管理...", self.show_plugin_manager)
+        settings_menu.addAction("模型设置...", lambda: show_settings(self))
+        settings_menu.addAction("插件管理...", lambda: show_plugin_manager(self))
 
         # ── 自动化菜单（定时任务 + 按次记录结果）──
         auto_menu = menubar.addMenu("自动化")
@@ -751,31 +307,52 @@ class ChatWindow(QMainWindow):
     # ═══════════════════════════════════════════════
 
     def eventFilter(self, obj, event):
-        """事件过滤器：QApplication 级别拦截 Ctrl+C 优先复制 chat_display 文本；
-        chat_display 级别拦截文本输入事件"""
+        """事件过滤器（唯一入口）：
+        1) conv_list / viewport 宽度变化 → 延迟重建列表项，保证 ⋯ 按钮完整可见；
+        2) QApplication 级别拦截 Ctrl+C 优先复制 chat_display 文本；
+        3) chat_display 级别拦截文本输入事件
+
+        注意：本方法在 setup_ui 构造过程中即会被调用（conv_list 的过滤器在
+        chat_display 创建之前安装，addWidget 会同步派发事件）。因此对
+        chat_display / input_field / status_label 的访问必须用防御性 getattr，
+        任何异常穿越 C++ 回调栈都会导致进程硬崩（Windows 表现为段错误）。
+        """
         etype = event.type()
+
+        # ── conv_list / viewport Resize：延迟重建 ──
+        # 关键时序：conv_list 先收到 Resize，此刻 viewport 还是旧宽度；
+        # 必须延迟到布局稳定后（singleShot 0）再读真实视口宽，否则
+        # vw == 上次记录值 会跳过重建，item 宽度被锁死在构造期假值 636px，
+        # ⋯ 按钮被推到视口之外 → 用户看不到、点不到。
+        conv_list = getattr(self, "conv_list", None)
+        if conv_list is not None and etype == QEvent.Resize and (
+                obj is conv_list or obj is conv_list.viewport()):
+            QTimer.singleShot(0, self._maybe_refresh_conv_list)
+
+        chat_display = getattr(self, "chat_display", None)
 
         # ── QApplication 级别：全局拦截 Ctrl+C ──
         # 因为 chat_display 设置了 NoFocus，键盘事件不会发给它。
         # 必须在 QApplication 级别拦截，优先级高于 QLineEdit 等控件的内部处理。
-        if obj is not self.chat_display and etype == QEvent.KeyPress:
+        if chat_display is not None and obj is not chat_display and etype == QEvent.KeyPress:
             key = event.key()
             modifiers = event.modifiers()
             if (key == Qt.Key_C and modifiers == Qt.ControlModifier
-                    and obj is not self.input_field):
+                    and obj is not getattr(self, "input_field", None)):
                 # 优先检查 chat_display 是否有选中文本
-                cursor = self.chat_display.textCursor()
+                cursor = chat_display.textCursor()
                 if cursor.hasSelection():
                     clipboard = QApplication.clipboard()
                     clipboard.setText(cursor.selectedText())
-                    self.status_label.setText("已复制选中内容")
-                    from PyQt5.QtCore import QTimer
-                    QTimer.singleShot(1500, self.update_status)
+                    status_label = getattr(self, "status_label", None)
+                    if status_label is not None:
+                        status_label.setText("已复制选中内容")
+                        QTimer.singleShot(1500, self.update_status)
                     return True  # 消费事件，阻止继续传播
                 # chat_display 无选中文本时，不拦截，让其他控件正常处理复制
 
         # ── chat_display 级别：拦截文本编辑事件 ──
-        if obj is not self.chat_display:
+        if chat_display is None or obj is not chat_display:
             return False
 
         # 放行 ShortcutOverride 事件，让 Qt 快捷键系统正常工作
@@ -798,6 +375,16 @@ class ChatWindow(QMainWindow):
         if etype in (QEvent.KeyRelease, QEvent.InputMethod, QEvent.InputMethodQuery):
             return True
         return super().eventFilter(obj, event)
+
+    def _maybe_refresh_conv_list(self):
+        """布局稳定后读取真实视口宽，与上次记录不一致才重建列表项宽度。
+
+        必须在事件回调之外读取：conv_list 的 Resize 事件早于 viewport，
+        回调内读到的 viewport 宽度是陈旧的，会误判为"宽度没变"而跳过重建。
+        """
+        vw = self.conv_list.viewport().width()
+        if vw and vw != getattr(self, "_conv_vp_w", -1):
+            refresh_conv_list(self)
 
     # ═══════════════════════════════════════════════
     #  消息发送
@@ -1034,8 +621,8 @@ class ChatWindow(QMainWindow):
         cursor.removeSelectedText()
         clean = sanitize(self._raw_buffer)
         if clean:
-            cursor.insertHtml(self._build_bubble(
-                self._cur_sender, clean, tag, self._cur_time))
+            cursor.insertHtml(build_bubble(
+                self.theme, self._cur_sender, clean, tag, self._cur_time))
         self._scroll_to_bottom()
 
     def _append_text(self, text, tag):
@@ -1061,7 +648,7 @@ class ChatWindow(QMainWindow):
         self.current_tag = None
         self._block_start_pos = None
         self._raw_buffer = ""
-        self._save_current_to_conv()
+        save_current_to_conv(self)
         self.update_status()
 
     def handle_error(self, error_msg):
@@ -1077,118 +664,11 @@ class ChatWindow(QMainWindow):
     #  主题 & 气泡渲染（QQ 风格）
     # ═══════════════════════════════════════════════
 
-    def _palette(self):
-        """返回当前主题下的配色（用于气泡与列表）。"""
-        if self.theme == "dark":
-            return {
-                "chat_bg": "#161616",
-                "ai_bubble": "#2A2A2A", "ai_fg": "#E8E8E8",
-                "user_bubble": "#2F7D5B", "user_fg": "#FFFFFF",
-                "tool_bg": "#3A3020", "tool_fg": "#E0C089",
-                "sys_bg": "#2A2A2A", "sys_fg": "#9A9A9A",
-                "err_bg": "#3A1F1F", "err_fg": "#FF9A9A",
-                "think_bg": "#242424", "think_fg": "#9A9A9A",
-                "avatar_ai": "#4E6EF2", "avatar_user": "#23B36B",
-                "avatar_tool": "#E0913A", "avatar_think": "#7A7FB0",
-                "ts_fg": "#777777",
-                "conv_sel": "#34406B", "conv_hover": "#2A2E38", "conv_fg": "#E5E5E5",
-            }
-        return {
-            "chat_bg": "#F5F5F7",
-            "ai_bubble": "#FFFFFF", "ai_fg": "#1F1F1F",
-            "user_bubble": "#95EC69", "user_fg": "#1A1A1A",
-            "tool_bg": "#FFF7E6", "tool_fg": "#9A6B1A",
-            "sys_bg": "#EDEFF2", "sys_fg": "#8A8F99",
-            "err_bg": "#FDECEC", "err_fg": "#D93025",
-            "think_bg": "#F0F1F3", "think_fg": "#8A8F99",
-            "avatar_ai": "#4E6EF2", "avatar_user": "#23B36B",
-            "avatar_tool": "#E0913A", "avatar_think": "#9AA0C0",
-            "ts_fg": "#B0B4BD",
-            "conv_sel": "#D6E4FF", "conv_hover": "#EEF2FF", "conv_fg": "#333333",
-        }
 
-    def _theme_qss(self, theme):
-        """返回整套界面 QSS（浅色 / 深色）。"""
-        if theme == "dark":
-            return """
-            QMainWindow { background-color: #1A1A1A; }
-            QFrame#sidebar { background-color: #202020; border-right: 1px solid #2C2C2C; }
-            QPushButton#btnNewChat { background-color: #2A2A2A; border: 1px solid #3A3A3A; border-radius: 8px; padding: 8px 16px; font-size: 13px; color: #E5E5E5; text-align: left; }
-            QPushButton#btnNewChat:hover { background-color: #2F3350; border-color: #4E6EF2; }
-            QListWidget#convList { border: none; background: transparent; font-size: 13px; outline: none; padding: 4px 4px; }
-            QListWidget#convList::item { background: transparent; padding: 0px; margin: 0px; }
-            QLabel#sidebarTitle { font-size: 14px; font-weight: bold; padding: 16px 16px 8px 16px; color: #E5E5E5; }
-            QPushButton#btnConvMenu { background: transparent; border: none; font-size: 14px; color: #888888; padding: 4px 6px; border-radius: 4px; }
-            QPushButton#btnConvMenu:hover { background-color: #333333; color: #E5E5E5; }
-            QFrame#inputFrame { background-color: #1A1A1A; border-top: 1px solid #2C2C2C; }
-            QLineEdit { border: 1px solid #3A3A3A; border-radius: 18px; padding: 10px 16px; font-size: 13px; background: #262626; min-height: 20px; color: #E5E5E5; }
-            QLineEdit:focus { border-color: #4E6EF2; }
-            QPushButton#btnSend { background-color: #4E6EF2; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
-            QPushButton#btnSend:hover { background-color: #3B5BEF; }
-            QPushButton#btnSend:pressed { background-color: #2D4CD9; }
-            QPushButton#btnSend:disabled { background-color: #3A3F55; }
-            QPushButton#btnStop { background-color: #E04848; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
-            QPushButton#btnStop:hover { background-color: #CC3333; }
-            QWidget#expertBar { background-color: #1E1E1E; border-bottom: 1px solid #2C2C2C; }
-            QLabel#expertLabel { font-size: 12px; color: #AAAAAA; }
-            QComboBox#expertCombo { border: 1px solid #3A3A3A; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #E5E5E5; background: #262626; min-height: 20px; }
-            QComboBox#expertCombo:focus { border-color: #4E6EF2; }
-            QComboBox#expertCombo:on { border-color: #4E6EF2; }
-            QComboBox#expertCombo QAbstractItemView { font-size: 12px; background: #262626; border: 1px solid #3A3A3A; border-radius: 6px; outline: 0; selection-background-color: #34406B; selection-color: #E5E5E5; }
-            QComboBox#expertCombo QAbstractItemView::item { color: #E5E5E5; padding: 6px 12px; }
-            QComboBox#expertCombo QAbstractItemView::item:selected { color: #E5E5E5; background: #34406B; }
-            QComboBox#expertCombo QAbstractItemView::item:hover { color: #E5E5E5; background: #2E3340; }
-            QTextEdit#chatDisplay { font-family: 'Microsoft YaHei'; font-size: 13px; border: none; background-color: #161616; color: #E8E8E8; }
-            QStatusBar { background: #1A1A1A; color: #AAAAAA; }
-            QStatusBar::item { border: none; }
-            QMenu { background-color: #262626; border: 1px solid #3A3A3A; border-radius: 6px; padding: 4px; }
-            QMenu::item { padding: 8px 24px; font-size: 13px; color: #E5E5E5; }
-            QMenu::item:selected { background-color: #34406B; border-radius: 4px; }
-            """
-        return """
-            QMainWindow { background-color: #FFFFFF; }
-            QFrame#sidebar { background-color: #F7F8FA; border-right: 1px solid #E5E6EB; }
-            QPushButton#btnNewChat { background-color: #FFFFFF; border: 1px solid #E5E6EB; border-radius: 8px; padding: 8px 16px; font-size: 13px; color: #333333; text-align: left; }
-            QPushButton#btnNewChat:hover { background-color: #EEF2FF; border-color: #4E6EF2; }
-            QListWidget#convList { border: none; background: transparent; font-size: 13px; outline: none; padding: 4px 4px; }
-            QListWidget#convList::item { background: transparent; padding: 0px; margin: 0px; }
-            QLabel#sidebarTitle { font-size: 14px; font-weight: bold; padding: 16px 16px 8px 16px; color: #333333; }
-            QPushButton#btnConvMenu { background: transparent; border: none; font-size: 14px; color: #999999; padding: 4px 6px; border-radius: 4px; }
-            QPushButton#btnConvMenu:hover { background-color: #E5E6EB; color: #333333; }
-            QFrame#inputFrame { background-color: #F7F8FA; border-top: 1px solid #E5E6EB; }
-            QLineEdit { border: 1px solid #E5E6EB; border-radius: 18px; padding: 10px 16px; font-size: 13px; background: #FFFFFF; min-height: 20px; color: #333333; }
-            QLineEdit:focus { border-color: #4E6EF2; }
-            QPushButton#btnSend { background-color: #4E6EF2; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
-            QPushButton#btnSend:hover { background-color: #3B5BEF; }
-            QPushButton#btnSend:pressed { background-color: #2D4CD9; }
-            QPushButton#btnSend:disabled { background-color: #B0B8D0; }
-            QPushButton#btnStop { background-color: #E04848; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
-            QPushButton#btnStop:hover { background-color: #CC3333; }
-            QWidget#expertBar { background-color: #F7F8FA; border-bottom: 1px solid #E5E6EB; }
-            QLabel#expertLabel { font-size: 12px; color: #666666; }
-            QComboBox#expertCombo { border: 1px solid #E5E6EB; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #333333; background: #FFFFFF; min-height: 20px; }
-            QComboBox#expertCombo:focus { border-color: #4E6EF2; }
-            QComboBox#expertCombo:on { border-color: #4E6EF2; }
-            QComboBox#expertCombo QAbstractItemView { font-size: 12px; background: #FFFFFF; border: 1px solid #E5E6EB; border-radius: 6px; outline: 0; selection-background-color: #EEF1FF; selection-color: #333333; }
-            QComboBox#expertCombo QAbstractItemView::item { color: #333333; padding: 6px 12px; }
-            QComboBox#expertCombo QAbstractItemView::item:selected { color: #333333; background: #EEF1FF; }
-            QComboBox#expertCombo QAbstractItemView::item:hover { color: #333333; background: #F2F4F8; }
-            QTextEdit#chatDisplay { font-family: 'Microsoft YaHei'; font-size: 13px; border: none; background-color: #F5F5F7; color: #1F1F1F; }
-            QStatusBar { background: #F7F8FA; color: #666666; }
-            QStatusBar::item { border: none; }
-            QMenu { background-color: #FFFFFF; border: 1px solid #E5E6EB; border-radius: 6px; padding: 4px; }
-            QMenu::item { padding: 8px 24px; font-size: 13px; color: #333333; }
-            QMenu::item:selected { background-color: #EEF2FF; border-radius: 4px; }
-            """
 
     def apply_theme(self, rerender_chat=True):
-        """应用浅色 / 深色主题：注入 QSS，并按需重渲染会话列表与聊天气泡。"""
-        self.setStyleSheet(self._theme_qss(self.theme))
-        self.status_label.setStyleSheet(
-            f"color: {self._palette()['ts_fg']}; padding: 0 8px;")
-        self._refresh_conv_list()
-        if rerender_chat:
-            self._load_current_conv()
+        """应用浅色 / 深色主题：委托 theme 模块实现。"""
+        apply_theme_to_window(self, rerender_chat)
 
     def _toggle_theme(self):
         """侧边栏 🌓 按钮：在浅色 / 深色之间切换并持久化。"""
@@ -1196,70 +676,7 @@ class ChatWindow(QMainWindow):
         self._save_settings()
         self.apply_theme(rerender_chat=True)
 
-    def _avatar_td(self, bg, icon):
-        return (f'<td width="36" align="center" style="vertical-align:top;">'
-                f'<div style="width:34px;height:34px;border-radius:17px;'
-                f'background:{bg};color:#ffffff;text-align:center;'
-                f'font-size:18px;line-height:34px;">{icon}</div></td>')
 
-    def _build_bubble(self, sender, text, tag, time_str):
-        p = self._palette()
-        esc = html.escape(text).replace("\n", "<br>")
-        ts_fg = p["ts_fg"]
-        mono = 'font-family:"Consolas","Courier New",monospace;font-size:12px;'
-        spacer = '<td width="10%"></td>'
-
-        if tag == "user":
-            bubble = ('<td width="72%" align="right" style="background:{ub};'
-                      'color:{uf};border-radius:16px;padding:9px 13px;'
-                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;">{esc}</td>'
-                      ).format(ub=p["user_bubble"], uf=p["user_fg"], esc=esc)
-            av = self._avatar_td(p["avatar_user"], "🧑")
-            row = f'<tr>{spacer}{bubble}{av}</tr>'
-        elif tag == "tool":
-            bubble = ('<td width="72%" align="left" style="background:{tb};'
-                      'color:{tf};border-radius:12px;padding:8px 12px;{mono}'
-                      'line-height:1.5;">{esc}</td>'
-                      ).format(tb=p["tool_bg"], tf=p["tool_fg"], mono=mono, esc=esc)
-            av = self._avatar_td(p["avatar_tool"], "🔧")
-            row = f'<tr>{av}{bubble}{spacer}</tr>'
-        elif tag == "thinking":
-            bubble = ('<td width="72%" align="left" style="background:{kb};'
-                      'color:{kf};border-radius:14px;padding:9px 13px;'
-                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;'
-                      'font-style:italic;">{esc}</td>'
-                      ).format(kb=p["think_bg"], kf=p["think_fg"], esc=esc)
-            av = self._avatar_td(p["avatar_think"], "💭")
-            row = f'<tr>{av}{bubble}{spacer}</tr>'
-        elif tag == "error":
-            bubble = ('<td width="80%" align="left" style="background:{eb};'
-                      'color:{ef};border-radius:12px;padding:8px 12px;'
-                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.5;">{esc}</td>'
-                      ).format(eb=p["err_bg"], ef=p["err_fg"], esc=esc)
-            row = f'<tr>{spacer}{bubble}<td width="10%"></td></tr>'
-        elif tag == "system":
-            # 系统提示：时间戳 + 居中胶囊，整行放入单一表格
-            return (f'<table width="100%" cellpadding="3" cellspacing="0">'
-                    f'<tr><td align="center" style="color:{ts_fg};font-size:11px;'
-                    f'font-family:"Microsoft YaHei";padding:4px 0 2px 0;">{time_str}</td></tr>'
-                    f'<tr><td align="center"><span style="background:{p["sys_bg"]};'
-                    f'color:{p["sys_fg"]};padding:3px 12px;border-radius:10px;'
-                    f'font-size:12px;font-family:"Microsoft YaHei";">{esc}</span></td></tr>'
-                    f'</table>')
-        else:  # 默认：AI 回复（左侧，机器人头像）
-            bubble = ('<td width="72%" align="left" style="background:{ab};'
-                      'color:{af};border-radius:16px;padding:9px 13px;'
-                      'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;">{esc}</td>'
-                      ).format(ab=p["ai_bubble"], af=p["ai_fg"], esc=esc)
-            av = self._avatar_td(p["avatar_ai"], "🤖")
-            row = f'<tr>{av}{bubble}{spacer}</tr>'
-
-        # 时间戳作为表格首行，用 <td align="center"> 承载（Qt 可靠居中）
-        return (f'<table width="100%" cellpadding="3" cellspacing="0">'
-                f'<tr><td align="center" colspan="3" style="color:{ts_fg};'
-                f'font-size:11px;font-family:"Microsoft YaHei";'
-                f'padding:6px 0 2px 0;">{time_str}</td></tr>'
-                f'{row}</table>')
 
     def display_message(self, sender, message, tag=None, time_str=None):
         message = sanitize(message)
@@ -1271,7 +688,7 @@ class ChatWindow(QMainWindow):
         cursor.movePosition(QTextCursor.End)
         if cursor.position() > 0:
             cursor.insertHtml("<br>")
-        cursor.insertHtml(self._build_bubble(sender, message, tag or "ai", time_str))
+        cursor.insertHtml(build_bubble(self.theme, sender, message, tag or "ai", time_str))
         self._scroll_to_bottom()
         self.current_tag = None
 
@@ -1297,9 +714,12 @@ class ChatWindow(QMainWindow):
     def update_status(self):
         status = "开启" if self.enable_context else "关闭"
         tools_status = "开" if self.enable_tools else "关"
-        conv = self._get_current_conv()
+        conv = get_current_conv(self)
         if conv:
-            conv_title = conv["title"]
+            # 状态栏标题：压缩空白并截断，避免长标题把状态栏撑臃肿
+            conv_title = " ".join(str(conv["title"]).split())
+            if len(conv_title) > 18:
+                conv_title = conv_title[:18] + "…"
             history = conv.get("history", [])
             user_count = len([m for m in history if m.get("role") == "user"])
             total_count = len(history)
@@ -1318,7 +738,7 @@ class ChatWindow(QMainWindow):
 
     def compress_conversation(self):
         """压缩当前对话历史：先保存，再用 AI 生成摘要替换旧历史"""
-        conv = self._get_current_conv()
+        conv = get_current_conv(self)
         history = conv.get("history", []) if conv else []
 
         if not history:
@@ -1349,7 +769,7 @@ class ChatWindow(QMainWindow):
         self.on_stop_response()
 
         # 保存当前对话到缓存
-        self._save_current_to_conv()
+        save_current_to_conv(self)
 
         # 懒加载 compressor 实例
         if self._compressor is None:
@@ -1373,10 +793,10 @@ class ChatWindow(QMainWindow):
         # 写回对话
         if conv:
             conv["history"] = compressed
-            self._save_convs()
+            save_convs(self)
 
         # 重新加载当前对话显示
-        self._load_current_conv()
+        load_current_conv(self)
 
         # 反馈结果
         original = metadata.get("original_count", len(history))
@@ -1398,19 +818,19 @@ class ChatWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            conv = self._get_current_conv()
+            conv = get_current_conv(self)
             if conv:
                 conv["history"] = []
             self.conversation_history = []
             self.chat_display.clear()
             self.current_tag = None
             self.display_message("系统", "对话内容已清空", "system")
-            self._save_convs()
-            self._refresh_conv_list()
+            save_convs(self)
+            refresh_conv_list(self)
             self.update_status()
 
     def export_conversation(self):
-        conv = self._get_current_conv()
+        conv = get_current_conv(self)
         if not conv:
             QMessageBox.information(self, "提示", "没有当前对话")
             return
@@ -1449,9 +869,9 @@ class ChatWindow(QMainWindow):
                 }
                 self.conversations.insert(0, conv)
                 self.current_conv_id = conv["id"]
-                self._save_convs()
-                self._refresh_conv_list()
-                self._load_current_conv()
+                save_convs(self)
+                refresh_conv_list(self)
+                load_current_conv(self)
                 self.display_message("系统", f"已导入对话: {conv['title']}", "system")
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"导入失败: {e}")
@@ -1482,7 +902,7 @@ class ChatWindow(QMainWindow):
                 self._sched_timer.stop()
         except Exception:
             pass
-        self._save_current_to_conv()
+        save_current_to_conv(self)
         event.accept()
 
     # ═════════════════════════════════════════
@@ -1495,321 +915,3 @@ class ChatWindow(QMainWindow):
         dlg.exec_()
 
 
-class AutomationManagerDialog(QDialog):
-    """自动化任务列表：新建 / 编辑 / 删除 / 立即运行 / 查看日志 / 刷新"""
-
-    # 跨线程安全回调：worker 线程执行完后用信号把结果发回 GUI 线程
-    _run_done = pyqtSignal(str, str)  # (final, error)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent_window = parent
-        self._run_done.connect(self._on_done)
-        self.setWindowTitle("自动化任务管理")
-        self.resize(760, 500)
-        layout = QVBoxLayout(self)
-
-        self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(self._edit_selected)
-        layout.addWidget(self.list, 1)
-
-        btn_row = QHBoxLayout()
-        self.btn_new = QPushButton("新建")
-        self.btn_edit = QPushButton("编辑")
-        self.btn_del = QPushButton("删除")
-        self.btn_run = QPushButton("立即运行")
-        self.btn_log = QPushButton("查看日志")
-        self.btn_refresh = QPushButton("刷新")
-        for b in (self.btn_new, self.btn_edit, self.btn_del,
-                  self.btn_run, self.btn_log, self.btn_refresh):
-            btn_row.addWidget(b)
-        layout.addLayout(btn_row)
-
-        self.status = QLabel("")
-        layout.addWidget(self.status)
-
-        self.btn_new.clicked.connect(self._new)
-        self.btn_edit.clicked.connect(self._edit_selected)
-        self.btn_del.clicked.connect(self._delete)
-        self.btn_run.clicked.connect(self._run_now)
-        self.btn_log.clicked.connect(self._view_logs)
-        self.btn_refresh.clicked.connect(self.refresh)
-
-        self.refresh()
-
-    def _items(self):
-        return self.parent_window.scheduler.automations
-
-    def refresh(self):
-        self.list.clear()
-        for a in self._items():
-            sch = a.get("schedule", {})
-            enabled = a.get("enabled", True)
-            last = a.get("last_run")
-            status = a.get("last_status")
-            last_txt = ""
-            if last:
-                st = "✓" if status == "ok" else ("✗" if status == "error" else "?")
-                last_txt = f" | 上次: {st} {last}"
-            mark = "●" if enabled else "○"
-            text = (f"{mark} {a.get('name', '?')}  "
-                   f"〔{describe_schedule(sch)}〕{last_txt}")
-            item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, a.get("id"))
-            self.list.addItem(item)
-
-    def _selected_id(self):
-        item = self.list.currentItem()
-        if item:
-            return item.data(Qt.UserRole)
-        return None
-
-    def _new(self):
-        dlg = AutomationEditDialog(self)
-        if dlg.exec_() == QDialog.Accepted:
-            self.parent_window.scheduler.add_automation(
-                name=dlg.name_edit.text().strip(),
-                prompt=dlg.prompt_edit.toPlainText().strip(),
-                schedule=dlg.get_schedule(),
-                enabled=dlg.enabled_chk.isChecked(),
-                max_rounds=dlg.rounds_spin.value(),
-            )
-            self.refresh()
-
-    def _edit_selected(self):
-        aid = self._selected_id()
-        if not aid:
-            QMessageBox.information(self, "提示", "请先选择一个任务")
-            return
-        auto = next((a for a in self._items() if a.get("id") == aid), None)
-        if not auto:
-            return
-        dlg = AutomationEditDialog(self, auto)
-        if dlg.exec_() == QDialog.Accepted:
-            self.parent_window.scheduler.update_automation(
-                aid,
-                name=dlg.name_edit.text().strip(),
-                prompt=dlg.prompt_edit.toPlainText().strip(),
-                schedule=dlg.get_schedule(),
-                enabled=dlg.enabled_chk.isChecked(),
-                max_rounds=dlg.rounds_spin.value(),
-            )
-            self.refresh()
-
-    def _delete(self):
-        aid = self._selected_id()
-        if not aid:
-            return
-        name = next((a.get("name") for a in self._items()
-                   if a.get("id") == aid), aid)
-        if QMessageBox.question(
-                self, "确认删除",
-                f"确定删除任务「{name}」？\n（已生成的执行记录日志会保留）",
-                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            self.parent_window.scheduler.delete_automation(aid)
-            self.refresh()
-
-    def _run_now(self):
-        aid = self._selected_id()
-        if not aid:
-            return
-        self.status.setText("执行中…")
-        self.btn_run.setEnabled(False)
-
-        def _worker():
-            final, err = self.parent_window.scheduler.run_now(aid)
-            # 用信号跨线程安全回调（QTimer.singleShot 在 worker 线程里不会触发）
-            self._run_done.emit(final, err)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_done(self, final, err):
-        self.btn_run.setEnabled(True)
-        self.refresh()
-        if err:
-            self.status.setText(f"执行失败: {err[:120]}")
-            QMessageBox.warning(self, "执行失败", err[:500])
-        else:
-            self.status.setText("执行完成")
-            msg = final[:800] + ("…" if len(final) > 800 else "")
-            QMessageBox.information(self, "执行结果", msg)
-
-    def _view_logs(self):
-        aid = self._selected_id()
-        if not aid:
-            return
-        auto = next((a for a in self._items() if a.get("id") == aid), None)
-        dlg = LogViewDialog(self, auto, self.parent_window.scheduler)
-        dlg.exec_()
-
-
-class AutomationEditDialog(QDialog):
-    """新建 / 编辑单个自动化任务：名称、提示词、周期、启用、轮次"""
-
-    def __init__(self, parent=None, auto=None):
-        super().__init__(parent)
-        self.auto = auto
-        self.setWindowTitle("编辑自动化任务" if auto else "新建自动化任务")
-        self.resize(580, 540)
-        layout = QFormLayout(self)
-
-        self.name_edit = QLineEdit()
-        self.prompt_edit = QTextEdit()
-        self.prompt_edit.setMinimumHeight(160)
-        self.enabled_chk = QCheckBox("启用此任务")
-        self.enabled_chk.setChecked(True)
-        self.rounds_spin = QSpinBox()
-        self.rounds_spin.setRange(1, 50)
-        self.rounds_spin.setValue(12)
-
-        layout.addRow("任务名称:", self.name_edit)
-        layout.addRow("任务提示词:", self.prompt_edit)
-        layout.addRow("工具循环轮次:", self.rounds_spin)
-        layout.addRow("", self.enabled_chk)
-
-        # ── 周期设置 ──
-        self.type_combo = QComboBox()
-        self.type_combo.addItems(["interval", "daily", "weekly", "once"])
-        self.type_combo.currentTextChanged.connect(self._on_type_changed)
-        layout.addRow("周期类型:", self.type_combo)
-
-        self.sched_widget = QWidget()
-        self.sched_layout = QFormLayout(self.sched_widget)
-        layout.addRow(self.sched_widget)
-
-        # interval
-        self.every_spin = QSpinBox()
-        self.every_spin.setRange(1, 9999)
-        self.every_spin.setValue(1)
-        self.unit_combo = QComboBox()
-        self.unit_combo.addItems(["minutes", "hours", "days"])
-        self.interval_row = self._row_widget([self.every_spin, self.unit_combo])
-
-        # daily / weekly 时间
-        self.time_edit = QTimeEdit()
-        self.time_edit.setDisplayFormat("HH:mm")
-
-        # weekly 星期
-        self.day_checks = {}
-        day_box = QGroupBox("星期（勾选执行日）")
-        day_layout = QHBoxLayout(day_box)
-        for i, nm in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
-            cb = QCheckBox("周" + nm)
-            cb.setChecked(i < 5)
-            self.day_checks[i] = cb
-            day_layout.addWidget(cb)
-        self.weekday_box = day_box
-
-        # once 时间
-        self.datetime_edit = QDateTimeEdit()
-        self.datetime_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self.datetime_edit.setDateTime(QDateTime.currentDateTime())
-
-        self.sched_layout.addRow("间隔:", self.interval_row)
-        self.sched_layout.addRow("时间:", self.time_edit)
-        self.sched_layout.addRow("", self.weekday_box)
-        self.sched_layout.addRow("执行时间:", self.datetime_edit)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addRow(btns)
-
-        if auto:
-            self._load(auto)
-        self._on_type_changed(self.type_combo.currentText())
-
-    def _row_widget(self, widgets):
-        w = QWidget()
-        h = QHBoxLayout(w)
-        for x in widgets:
-            h.addWidget(x)
-        return w
-
-    def _load(self, auto):
-        self.name_edit.setText(auto.get("name", ""))
-        self.prompt_edit.setPlainText(auto.get("prompt", ""))
-        self.enabled_chk.setChecked(auto.get("enabled", True))
-        self.rounds_spin.setValue(auto.get("max_rounds", 12))
-        sch = auto.get("schedule", {})
-        self.type_combo.setCurrentText(sch.get("type", "interval"))
-        self.every_spin.setValue(sch.get("every", 1))
-        self.unit_combo.setCurrentText(sch.get("unit", "minutes"))
-        if sch.get("time"):
-            h, m = sch["time"].split(":")
-            self.time_edit.setTime(QTime(int(h), int(m)))
-        for i, cb in self.day_checks.items():
-            cb.setChecked(i in sch.get("weekdays", []))
-        if sch.get("datetime"):
-            self.datetime_edit.setDateTime(
-                QDateTime.fromString(sch["datetime"], "yyyy-MM-dd HH:mm"))
-
-    def _on_type_changed(self, typ):
-        self.interval_row.setVisible(typ == "interval")
-        self.time_edit.setVisible(typ in ("daily", "weekly"))
-        self.weekday_box.setVisible(typ == "weekly")
-        self.datetime_edit.setVisible(typ == "once")
-
-    def get_schedule(self):
-        typ = self.type_combo.currentText()
-        if typ == "interval":
-            return {"type": "interval", "every": self.every_spin.value(),
-                    "unit": self.unit_combo.currentText()}
-        if typ == "daily":
-            return {"type": "daily",
-                    "time": self.time_edit.time().toString("HH:mm")}
-        if typ == "weekly":
-            days = [i for i, cb in self.day_checks.items() if cb.isChecked()]
-            return {"type": "weekly",
-                    "time": self.time_edit.time().toString("HH:mm"),
-                    "weekdays": days}
-        if typ == "once":
-            return {"type": "once",
-                    "datetime": self.datetime_edit.dateTime().toString("yyyy-MM-dd HH:mm")}
-        return {"type": "interval", "every": 1, "unit": "minutes"}
-
-
-class LogViewDialog(QDialog):
-    """查看某个任务的历史执行记录（每次执行一个 .md 全文）"""
-
-    def __init__(self, parent=None, auto=None, scheduler=None):
-        super().__init__(parent)
-        self.auto = auto
-        self.scheduler = scheduler
-        self.setWindowTitle(
-            f"执行记录 — {auto.get('name', '?')}" if auto else "执行记录")
-        self.resize(760, 540)
-        layout = QHBoxLayout(self)
-
-        self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(self._show_current)
-        layout.addWidget(self.list, 1)
-
-        right = QVBoxLayout()
-        self.view = QTextEdit()
-        self.view.setReadOnly(True)
-        self.view.setLineWrapMode(QTextEdit.NoWrap)
-        right.addWidget(self.view, 1)
-        layout.addLayout(right, 2)
-
-        if auto and scheduler:
-            runs = scheduler.list_runs(auto.get("id"))
-            for r in runs:
-                item = QListWidgetItem(
-                    f"{r.get('started_at', '')[:16]}  "
-                    f"{'✓' if r.get('status') == 'ok' else '✗'}  "
-                    f"({r.get('output_chars', 0)}字 / "
-                    f"{r.get('tool_calls', 0)}次工具)")
-                item.setData(Qt.UserRole, r.get("run_id"))
-                self.list.addItem(item)
-        if self.list.count():
-            self.list.setCurrentRow(0)
-            self._show_current()
-
-    def _show_current(self):
-        item = self.list.currentItem()
-        if not item:
-            return
-        run_id = item.data(Qt.UserRole)
-        content = self.scheduler.read_log(run_id)
-        self.view.setPlainText(content or "(无日志内容)")
