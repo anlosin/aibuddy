@@ -26,11 +26,12 @@ from datetime import datetime, timedelta
 # 模块级导入，供 run_automation / _build_system_prompt 共用
 from .plugin_manager import get_enabled_tools, get_system_prompts, dispatch_tool
 
-# scheduler.py 位于 qwen_app/ 内，运行时数据（automations.json 等）在项目根目录
+# scheduler.py 位于 qwen_app/ 内，运行时数据（automations.json 等）统一在 data/
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-AUTOMATIONS_FILE = os.path.join(PROJECT_ROOT, "automations.json")
-RUNS_FILE = os.path.join(PROJECT_ROOT, "automation_runs.json")
-LOG_DIR = os.path.join(PROJECT_ROOT, "automation_logs")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+AUTOMATIONS_FILE = os.path.join(DATA_DIR, "automations.json")
+RUNS_FILE = os.path.join(DATA_DIR, "automation_runs.json")
+LOG_DIR = os.path.join(DATA_DIR, "automation_logs")
 RUNS_INDEX_CAP = 300  # automation_runs.json 最多保留记录数
 
 

@@ -11,7 +11,7 @@ PLUGIN_INFO = {
 
 # ── 小说项目根目录 ──
 _NOVELS_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "novels"
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "novels"
 )
 
 # ── 系统提示词：引导 AI 成为专业小说家 ──

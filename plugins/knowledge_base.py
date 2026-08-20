@@ -32,7 +32,7 @@ SYSTEM_PROMPT = """你拥有离线知识库检索能力（knowledge_base 插件�
 检索技巧：查询用关键词组合，而非完整问句；可分多次检索不同角度。
 """
 
-INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "knowledge_base", "index.json")
+INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "knowledge_base", "index.json")
 
 TEXT_EXT = {".txt", ".md", ".py", ".json", ".csv", ".html", ".css", ".js", ".ts",
             ".xml", ".ini", ".yaml", ".yml", ".log", ".java", ".go", ".c", ".cpp",

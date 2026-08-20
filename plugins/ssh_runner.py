@@ -43,7 +43,7 @@ SYSTEM_PROMPT = """你拥有通过 SSH 操作远程 Linux/Unix 主机的能力�
 - 文件路径尽量用绝对路径，避免搞错远程工作目录
 """
 
-CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ssh_connections.json")
+CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ssh_connections.json")
 
 OUTPUT_LIMIT = 8000  # 远程命令输出截断上限（字符）
 

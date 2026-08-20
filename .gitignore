@@ -18,15 +18,8 @@ model_config.json
 db_connections.json
 ssh_connections.json
 
-# ===== 运行时数据（不含源码，避免泄露对话/任务/历史） =====
-automation_logs/
-automation_runs.json
-automations.json
-conversations/
-wf_out/
-novels/
-sub/
-knowledge_base/
+# ===== 运行时数据（统一收纳于 data/，不含源码，避免泄露对话/任务/历史） =====
+data/
 
 # ===== 数据库文件 =====
 *.db

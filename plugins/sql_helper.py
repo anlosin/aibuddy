@@ -33,7 +33,7 @@ SYSTEM_PROMPT = """你是一个资深数据库专家，精通 MySQL、PostgreSQL
 对于查询优化类问题，先分析现有 SQL 的执行计划预期瓶颈，再给出等价改写。
 对于建表/设计问题，给出规范化的表结构（包含字段类型、约束、注释）。"""
 
-CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db_connections.json")
+CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "db_connections.json")
 
 # 写操作关键字（只读模式下拦截）
 WRITE_RE = re.compile(

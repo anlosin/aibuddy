@@ -33,10 +33,10 @@ pip install -r requirements.txt
 复制示例配置并填入你自己的信息：
 
 ```bash
-cp model_config.example.json model_config.json
+cp model_config.example.json data/model_config.json
 ```
 
-`model_config.json` 字段说明：
+`data/model_config.json` 字段说明：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -69,6 +69,9 @@ python -m qwen_app.scheduler_run --once
 ## 目录结构
 
 - `main.py` — 入口启动器（项目根目录，导入 `qwen_app` 包）
+- `start.bat` — Windows 一键启动脚本
+- `model_config.example.json` — 配置模板（复制为 `data/model_config.json`）
+- `sp_*.txt` — 系统提示词模板（`sp_analyst` / `sp_developer` / `sp_general`）
 - `qwen_app/` — 核心应用包
   - `chat_window.py` — 主窗口与界面逻辑
   - `worker.py` — 对话与工具调用工作线程
@@ -79,15 +82,16 @@ python -m qwen_app.scheduler_run --once
   - `compressor.py` / `sanitizer.py` — 对话压缩与输入清洗
   - `experts/` — 专家声明（`*.json`）
   - `worker_system/` — 线程池 / 异步任务工具
-- `plugins/` — 各功能插件（顶层包，运行时数据经 `..` 指向项目根目录）
+- `plugins/` — 各功能插件（顶层包，运行时数据经 `..` 指向 `data/`）
 - `scripts/` — 辅助脚本（`push.py` 推送、`migrate_conversations.py` 迁移）
-- `tests/` — 测试与压测脚本
-- `backups/` — 备份文件（`.bak`）
-- 运行时数据（均被 `.gitignore` 排除）：`model_config.json`、`conversations/`、
-  `automations.json`、`automation_logs/`、`knowledge_base/`、`novels/` 等
+- `tests/` — 测试与压测脚本（结果产物输出到 `tests/output/`）
+- `data/` — 运行时数据（均被 `.gitignore` 排除，保持根目录干净）：
+  `model_config.json`、`conversations/`、`automations.json`、`automation_runs.json`、
+  `db_connections.json`、`automation_logs/`、`knowledge_base/`、`novels/`、
+  `wf_out/`、`sub/`、`backups/` 等
 
 ## 安全说明
 
-本项目面向内网使用。`model_config.json`（含密钥）、数据库连接、SSH 连接、
-对话记录、自动化日志等均已通过 `.gitignore` 排除，不会进入版本库。
+本项目面向内网使用。`data/model_config.json`（含密钥）、数据库连接、SSH 连接、
+对话记录、自动化日志等均收纳于 `data/` 并通过 `.gitignore` 排除，不会进入版本库。
 部署到公网前请自行评估网络安全与访问控制。

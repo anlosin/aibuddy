@@ -5,12 +5,13 @@ import sqlite3
 import threading
 
 
-# 包目录（qwen_app/）与项目根目录（运行时数据、plugins/ 等都放在根目录）
+# 包目录（qwen_app/）与项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 运行时数据统一收纳在 data/（json、日志、数据库、知识库等），根目录保持干净
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
-
-CONFIG_PATH = os.path.join(PROJECT_ROOT, "model_config.json")
-CONVERSATIONS_DIR = os.path.join(PROJECT_ROOT, "conversations")
+CONFIG_PATH = os.path.join(DATA_DIR, "model_config.json")
+CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
 CONVERSATIONS_DB = os.path.join(CONVERSATIONS_DIR, "conversations.db")
 
 # SQLite 连接是线程局部的（PyQt 主线程 + scheduler 后台线程）
@@ -60,6 +61,7 @@ def load_config():
 
 def save_config(cfg):
     """保存模型配置"""
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
