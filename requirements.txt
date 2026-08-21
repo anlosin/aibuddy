@@ -40,3 +40,5 @@ socksio>=1.0.0
 #   sudo apt-get install -y qtbase5-dev
 # 再 pip install -r requirements.txt（若从源码编译 PyQt5）。
 # macOS：brew install qt@5 后 pip install -r requirements.txt。
+
+python-qt5
