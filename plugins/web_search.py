@@ -1,5 +1,4 @@
 """网页搜索技能 —— 通过 DuckDuckGo 搜索网页（三重回退策略）"""
-import sys
 import urllib.request
 import urllib.parse
 

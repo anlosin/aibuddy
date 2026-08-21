@@ -1693,7 +1693,7 @@ class StressTester:
         print(f"  思考模式: {'开启' if self.enable_thinking else '关闭'}")
         print(f"  上下文:   {'独立' if self.no_context else '累积'}")
         print(f"  问题池:   {len(self.questions)} 题")
-        print(f"  回答要求: 中文回答 | 不少于 1000 字")
+        print("  回答要求: 中文回答 | 不少于 1000 字")
         print(f"  最大轮次: {self.max_rounds or '无限（直到出错）'}")
         print(f"  超时:     {self.api_timeout}s")
         print(f"  轮间间隔: {self.delay}s")

@@ -12,7 +12,7 @@ from datetime import datetime
 
 from PyQt5.QtCore import Qt, QPoint, QSize, QTimer
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
+from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QLabel,
                              QListWidgetItem, QMenu, QInputDialog,
                              QMessageBox, QSizePolicy, QApplication,
                              QFileDialog, QStyle)
@@ -152,8 +152,8 @@ def refresh_conv_list(window):
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFixedSize(btn_w, btn_w)
         transparent_ss = (
-            f"QLabel#btnConvMenu {{ background: transparent; color: transparent;"
-            f" font-size: 14px; border-radius: 4px; }}"
+            "QLabel#btnConvMenu { background: transparent; color: transparent;"
+            " font-size: 14px; border-radius: 4px; }}"
         )
         visible_ss = (
             f"QLabel#btnConvMenu {{ color: {pal['conv_fg']};"

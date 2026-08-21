@@ -2,21 +2,17 @@
 import os
 import sys
 import json
-import html
 import uuid
-import threading
 from datetime import datetime
 from typing import Optional
 
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QTextEdit, QLineEdit, QPushButton, QMenuBar, QMenu,
-                             QStatusBar, QMessageBox, QFileDialog, QDialog,
-                             QFormLayout, QLabel, QDialogButtonBox, QCheckBox,
-                             QListWidget, QListWidgetItem, QFrame,
-                             QInputDialog, QMenu, QApplication, QSizePolicy,
-                             QComboBox, QSpinBox, QTimeEdit, QDateTimeEdit,
-                             QGroupBox)
-from PyQt5.QtCore import Qt, QEvent, QPoint, QTimer, QDateTime, QTime, pyqtSignal
+                             QTextEdit, QLineEdit, QPushButton, QMenu,
+                             QStatusBar, QMessageBox, QFileDialog,
+                             QLabel,
+                             QListWidget, QFrame,
+                             QApplication, QComboBox)
+from PyQt5.QtCore import Qt, QEvent, QTimer
 from PyQt5.QtGui import QTextCharFormat, QColor, QTextCursor, QFont, QKeySequence
 from PyQt5.QtWidgets import QAction
 

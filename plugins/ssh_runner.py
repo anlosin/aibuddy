@@ -218,7 +218,6 @@ def _do_command(args):
     if err:
         return err
     try:
-        import paramiko
         if use_sudo:
             run_cmd = "sudo -S -p '' " + run_cmd
         stdin, stdout, stderr = client.exec_command(run_cmd, timeout=timeout)

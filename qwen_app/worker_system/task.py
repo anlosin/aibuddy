@@ -7,7 +7,6 @@ Worker 任务模块 — 线程安全的异步任务实现
 """
 from PyQt5.QtCore import QRunnable, pyqtSignal, QObject
 import threading
-from typing import Optional
 
 
 class WorkerSignals(QObject):

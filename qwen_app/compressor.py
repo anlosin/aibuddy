@@ -3,8 +3,7 @@
 提供 AI 驱动的智能摘要、历史清理功能，大幅减少上下文占用。
 核心思路：使用 AI 模型将长篇对话压缩成结构化关键信息总结。
 """
-import sys
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 
 class ConversationCompressor:

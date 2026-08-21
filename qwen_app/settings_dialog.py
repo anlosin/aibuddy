@@ -106,8 +106,6 @@ def show_settings(window):
                      or new_proxy != (window.proxy or "")
                      or chk_think.isChecked() != window.enable_thinking
                      or chk_tools.isChecked() != window.enable_tools)
-    changed = model_changed or new_ws != (window.workspace_root or "") \
-        or new_agent != window.agent_mode or new_rounds != window.max_agent_rounds
     theme_changed = new_theme != window.theme
 
     window.base_url = new_url

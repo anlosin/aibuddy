@@ -1,6 +1,5 @@
 """Excel 处理插件 — 创建/读取电子表格"""
 import os
-import json
 
 PLUGIN_INFO = {
     "name": "excel",

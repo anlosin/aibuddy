@@ -17,14 +17,15 @@
 - 独立模式：python scheduler_run.py（可在内网服务器用 systemd/计划任务 24/7 跑）
 """
 import os
-import sys
 import json
 import uuid
 import threading
 from datetime import datetime, timedelta
 
-# 模块级导入，供 run_automation / _build_system_prompt 共用
-from .plugin_manager import get_enabled_tools, get_system_prompts, dispatch_tool
+# 模块级导入，供 run_automation 使用。
+# 注意：dispatch_tool 在下方有同名模块级包装函数（复用 plugin_manager），故此处不导入；
+#       get_system_prompts 仅在 _build_system_prompt 内本地导入使用，亦不在此导入。
+from .plugin_manager import get_enabled_tools
 
 # scheduler.py 位于 qwen_app/ 内，运行时数据（automations.json 等）统一在 data/
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -391,7 +392,7 @@ class Scheduler:
         md_path = os.path.join(LOG_DIR, f"{aid}_{ts}.md")
         try:
             lines = []
-            lines.append(f"# 自动化任务执行记录\n")
+            lines.append("# 自动化任务执行记录\n")
             lines.append(f"- **任务**: {auto.get('name', aid)}")
             lines.append(f"- **时间**: {started.strftime('%Y-%m-%d %H:%M:%S')} → "
                         f"{finished.strftime('%Y-%m-%d %H:%M:%S')}")

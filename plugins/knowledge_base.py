@@ -13,7 +13,6 @@ import os
 import re
 import json
 import math
-import glob
 
 PLUGIN_INFO = {
     "name": "knowledge_base",

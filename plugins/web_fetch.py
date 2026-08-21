@@ -1,5 +1,4 @@
 """网页抓取插件 — 读取网页内容并提取纯文本"""
-import re
 import urllib.request
 import urllib.error
 import urllib.parse
