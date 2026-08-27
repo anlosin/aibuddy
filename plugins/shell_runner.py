@@ -72,6 +72,22 @@ def _workspace_root():
     return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
+def _safe_script_path(filename):
+    """解析脚本路径并强制约束在 workspace 根目录内，防止路径穿越。
+
+    相对路径与绝对路径一视同仁：用 realpath 规范化（解析 ../、符号链接、
+    冗余分隔符），最终路径必须位于 workspace 根目录之下，否则抛 ValueError。
+    """
+    root = _workspace_root()
+    root_real = os.path.realpath(root)
+    candidate = os.path.realpath(
+        filename if os.path.isabs(filename) else os.path.join(root, filename)
+    )
+    if candidate != root_real and not candidate.startswith(root_real + os.sep):
+        raise ValueError(f"脚本路径越界，禁止执行工作区之外的文件: {filename}")
+    return candidate
+
+
 def _refuse_if_blocked(command):
     for r in _BLOCKED_RE:
         if r.search(command or ""):
@@ -166,7 +182,10 @@ def _do_script(args):
     if not filename:
         return "错误: 未提供 filename"
     root = _workspace_root()
-    path = filename if os.path.isabs(filename) else os.path.join(root, filename)
+    try:
+        path = _safe_script_path(filename)
+    except ValueError as e:
+        return f"错误: {e}"
     if not os.path.exists(path):
         return "错误: 脚本不存在 - %s" % path
     interp = _interpreter_for(filename)
