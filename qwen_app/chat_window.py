@@ -66,6 +66,10 @@ class ChatWindow(QMainWindow):
         self._sched_timer = QTimer(self)
         self._sched_timer.timeout.connect(self.scheduler.check_due)
         self._sched_timer.start(30000)  # 30 秒
+        # ── 流式渲染节流：合并多次 chunk 的整块重绘，消除 O(n²) 卡顿 ──
+        self._stream_timer = QTimer(self)
+        self._stream_timer.setSingleShot(True)
+        self._stream_timer.timeout.connect(self._flush_stream)
         self.setup_ui()
 
     # ═══════════════════════════════════════════════
@@ -517,13 +521,7 @@ class ChatWindow(QMainWindow):
                 if not has_system:
                     messages.insert(0, {"role": "system", "content": sp})
 
-        if self.worker_thread:
-            self.worker_thread.stop()
-            self.worker_thread.wait(3000)  # 最多等 3 秒
-            if self.worker_thread.isRunning():
-                self.worker_thread.terminate()  # 超时强杀
-                self.worker_thread.wait(1000)
-            self.worker_thread = None
+        self._stop_worker_thread()
 
         self.current_tag = None
 
@@ -547,12 +545,7 @@ class ChatWindow(QMainWindow):
 
     def on_stop_response(self):
         if self.worker_thread:
-            self.worker_thread.stop()
-            self.worker_thread.wait(3000)  # 最多等 3 秒让线程退出
-            if self.worker_thread.isRunning():
-                self.worker_thread.terminate()
-                self.worker_thread.wait(1000)
-            self.worker_thread = None
+            self._stop_worker_thread()
             self.display_message("系统", "已中断回复", "system")
             self._on_worker_finished()
 
@@ -562,6 +555,27 @@ class ChatWindow(QMainWindow):
         self.input_field.setEnabled(True)
         self.input_field.setFocus()
         self.update_status()
+
+    def _stop_worker_thread(self, timeout_ms=3000):
+        """协作式停止后台回复线程。
+
+        仅设置停止信号并等待线程自行退出，**绝不调用 QThread.terminate()**。
+        terminate() 会瞬间杀死线程，可能让 OpenAI 流式连接 / SSL socket / 全局
+        client 处于不一致状态，导致界面卡死、文件描述符泄漏甚至崩溃。
+        WorkerThread.run() 每收到一个 chunk、每轮、每次工具调用后都会检查停止
+        信号并安全关闭连接，通常在下一个 chunk 到达前即可干净退出；极端情况下
+        线程阻塞在 recv 等待网络数据，会随 socket 超时（API_TIMEOUT）自行释放。
+        """
+        wt = self.worker_thread
+        if wt is None:
+            return
+        wt.stop()                        # 置位 _stop_event
+        if not wt.wait(timeout_ms):      # 等待其自行结束
+            # 等待超时：极可能是网络阻塞在 recv，不 terminate()，仅告警，
+            # 让线程随 stream 超时自然退出，避免强行杀线程带来的不确定后果。
+            print(f"[warn] 后台回复线程未在 {timeout_ms}ms 内退出，"
+                  f"等待其随网络超时自行结束（未使用 terminate）")
+        self.worker_thread = None
 
     # ── 格式化 ──
 
@@ -623,7 +637,15 @@ class ChatWindow(QMainWindow):
 
     def _append_text(self, text, tag):
         self._raw_buffer += text
-        self._rerender_block(tag)
+        # 节流：buffer 增长很便宜，但整块重绘（sanitize + build_bubble + insertHtml）
+        # 很贵。用 80ms 单次定时器把多个 chunk 合并成一次渲染，复杂度 O(n²)→O(n)
+        if not self._stream_timer.isActive():
+            self._stream_timer.start(80)
+
+    def _flush_stream(self):
+        """节流定时器触发：把累积的 buffer 整块重绘一次。"""
+        if getattr(self, "_raw_buffer", ""):
+            self._rerender_block(self.current_tag or "ai")
 
     def handle_chunk(self, content, is_thinking):
         tag = "thinking" if is_thinking else "ai"
@@ -634,6 +656,7 @@ class ChatWindow(QMainWindow):
         self._append_text(content, tag)
 
     def handle_response_complete(self, full_response):
+        self._stream_timer.stop()  # 取消可能未触发的节流渲染，下面立即做一次最终重绘
         if hasattr(self, "_raw_buffer") and self._raw_buffer:
             self._rerender_block(self.current_tag or "ai")
         if self.enable_context and full_response:
@@ -648,6 +671,7 @@ class ChatWindow(QMainWindow):
         self.update_status()
 
     def handle_error(self, error_msg):
+        self._stream_timer.stop()  # 避免回滚后仍触发节流重绘
         self.display_message("系统", f"错误: {error_msg}", "error")
         self.current_tag = None
         # 请求失败时回滚：移除最后一条 user 消息（无对应 assistant 回复），
@@ -886,13 +910,7 @@ class ChatWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        if self.worker_thread:
-            self.worker_thread.stop()
-            self.worker_thread.wait(3000)
-            if self.worker_thread.isRunning():
-                self.worker_thread.terminate()
-                self.worker_thread.wait(1000)
-            self.worker_thread = None
+        self._stop_worker_thread()
         try:
             if getattr(self, "_sched_timer", None):
                 self._sched_timer.stop()
