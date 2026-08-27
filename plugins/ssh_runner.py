@@ -259,19 +259,24 @@ def _sftp_transfer(args, upload):
     client, err = _get_client(name)
     if err:
         return err
+    sftp = None
     try:
         sftp = client.open_sftp()
         if upload:
             sftp.put(local_path, remote_path)
-            sftp.close()
             return f"✅ 已上传: {local_path} → [{name}]{remote_path}"
         else:
             sftp.get(remote_path, local_path)
-            sftp.close()
             return f"✅ 已下载: [{name}]{remote_path} → {local_path}"
     except Exception as e:
         _CLIENTS[name] = None
         return f"❌ 文件传输失败: {e}"
+    finally:
+        if sftp is not None:
+            try:
+                sftp.close()
+            except Exception:
+                pass
 
 
 def _do_list_connections(args):

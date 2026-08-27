@@ -332,22 +332,26 @@ class Scheduler:
     def check_due(self, now=None):
         """检查并启动所有到期任务。可在 QTimer 或阻塞循环中调用。"""
         now = now or datetime.now()
-        due = [a for a in self.automations if is_due(a, now)]
+        with self._lock:
+            due = [a for a in self.automations if is_due(a, now)]
         for auto in due:
             aid = auto.get("id")
-            if aid in self._running:
-                continue  # 防重入
+            with self._lock:
+                if aid in self._running:
+                    continue  # 防重入
             t = threading.Thread(
                 target=self._run_one, args=(auto,), daemon=True)
             t.start()
 
     def run_now(self, auto_id):
         """立即执行指定任务（忽略周期），用于「立即运行」按钮"""
-        auto = next((a for a in self.automations if a.get("id") == auto_id), None)
+        with self._lock:
+            auto = next((a for a in self.automations if a.get("id") == auto_id), None)
         if not auto:
             return None, "未找到任务"
-        if auto.get("id") in self._running:
-            return None, "该任务正在执行中"
+        with self._lock:
+            if auto.get("id") in self._running:
+                return None, "该任务正在执行中"
         started = datetime.now()
         final, tool_logs, error = run_automation(
             auto, self.client, self.model_id, self.plugins,
@@ -360,7 +364,8 @@ class Scheduler:
 
     def _run_one(self, auto):
         aid = auto.get("id")
-        self._running.add(aid)
+        with self._lock:
+            self._running.add(aid)
         try:
             started = datetime.now()
             final, tool_logs, error = run_automation(
@@ -380,7 +385,8 @@ class Scheduler:
             auto["last_error"] = str(e)
             self._save()
         finally:
-            self._running.discard(aid)
+            with self._lock:
+                self._running.discard(aid)
 
     def _record(self, auto, started, finished, status, final, tool_logs, error):
         aid = auto.get("id")
@@ -446,28 +452,32 @@ class Scheduler:
             "last_status": None,
             "last_error": "",
         }
-        self.automations.append(auto)
+        with self._lock:
+            self.automations.append(auto)
         self._save()
         return auto
 
     def update_automation(self, auto_id, **fields):
-        auto = next((a for a in self.automations if a.get("id") == auto_id), None)
-        if not auto:
-            return False
-        for k, v in fields.items():
-            auto[k] = v
+        with self._lock:
+            auto = next((a for a in self.automations if a.get("id") == auto_id), None)
+            if not auto:
+                return False
+            for k, v in fields.items():
+                auto[k] = v
         self._save()
         return True
 
     def delete_automation(self, auto_id):
-        self.automations = [a for a in self.automations if a.get("id") != auto_id]
+        with self._lock:
+            self.automations = [a for a in self.automations if a.get("id") != auto_id]
         self._save()
 
     def set_enabled(self, auto_id, enabled):
-        auto = next((a for a in self.automations if a.get("id") == auto_id), None)
-        if auto:
-            auto["enabled"] = enabled
-            self._save()
+        with self._lock:
+            auto = next((a for a in self.automations if a.get("id") == auto_id), None)
+            if auto:
+                auto["enabled"] = enabled
+        self._save()
 
     def list_runs(self, auto_id=None):
         index = load_runs_index()
