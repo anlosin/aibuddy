@@ -119,6 +119,38 @@ def load_conversations():
         return [], None
 
 
+def save_single_conversation(conv, current_id):
+    """增量更新：只写一条对话到 SQLite，不碰其他对话。
+
+    适用于仅修改当前对话 history/title 的场景（发送消息、切换对话等），
+    避免全量同步带来的不必要 I/O 开销。
+    """
+    init_conversations_db()
+    db = _get_db()
+    history_json = json.dumps(conv.get("history", []), ensure_ascii=False)
+    db.execute("""
+        INSERT INTO conversations (id, title, history, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title=excluded.title,
+            history=excluded.history,
+            updated_at=excluded.updated_at
+    """, (
+        conv["id"],
+        conv.get("title", "新对话"),
+        history_json,
+        conv.get("created_at", ""),
+        conv.get("updated_at", conv.get("created_at", "")),
+    ))
+    if current_id:
+        try:
+            ver = int(current_id, 16) & 0x7FFFFFFF
+        except (ValueError, TypeError):
+            ver = abs(hash(current_id)) & 0x7FFFFFFF
+        db.execute(f"PRAGMA user_version={ver}")
+    db.commit()
+
+
 def save_conversations(conversations, current_id):
     """全量同步对话列表到 SQLite（保持与旧 JSON 接口一致）"""
     init_conversations_db()

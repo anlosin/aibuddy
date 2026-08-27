@@ -821,7 +821,7 @@ class ChatWindow(QMainWindow):
         # 写回对话
         if conv:
             conv["history"] = compressed
-            save_convs(self)
+            save_current_to_conv(self)
 
         # 重新加载当前对话显示
         load_current_conv(self)
@@ -853,7 +853,7 @@ class ChatWindow(QMainWindow):
             self.chat_display.clear()
             self.current_tag = None
             self.display_message("系统", "对话内容已清空", "system")
-            save_convs(self)
+            save_current_to_conv(self)
             refresh_conv_list(self)
             self.update_status()
 

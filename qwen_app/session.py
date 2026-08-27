@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QLabel,
                              QFileDialog, QStyle)
 
 from .theme import get_palette
-from .config import load_conversations, save_conversations, CONVERSATIONS_DIR
+from .config import load_conversations, save_conversations, save_single_conversation, CONVERSATIONS_DIR
 
 
 def get_current_conv(window):
@@ -239,7 +239,7 @@ def save_current_to_conv(window):
                         first_line = m["content"].strip()
                     conv["title"] = first_line[:30] + ("..." if len(first_line) > 30 else "")
                     break
-        save_convs(window)
+        save_single_conversation(conv, window.current_conv_id)
         refresh_conv_list(window)
 
 
@@ -361,7 +361,7 @@ def rename_conversation(window, conv_id, old_title):
             if conv["id"] == conv_id:
                 conv["title"] = clean_title
                 break
-        save_convs(window)
+        save_single_conversation(conv, window.current_conv_id)
         refresh_conv_list(window)
 
 
