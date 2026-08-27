@@ -257,11 +257,30 @@ def _do_list_tables(args):
             pass
 
 
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,127}$")
+
+
+def _safe_identifier(ident):
+    """校验数据库标识符（表名/列名），仅允许字母/数字/下划线/美元符。
+
+    白名单校验从源头排除分号、引号、横杠等所有注入字符；校验失败抛
+    ValueError。配合方言引号包裹形成双重防护。
+    """
+    ident = (ident or "").strip()
+    if not _IDENT_RE.match(ident):
+        raise ValueError(f"非法的标识符: {ident!r}")
+    return ident
+
+
 def _do_schema(args):
     name = args.get("name") or "default"
     table = args.get("table", "")
     if not table:
         return "错误: 未提供 table"
+    try:
+        table = _safe_identifier(table)
+    except ValueError as e:
+        return f"错误: {e}"
     conn, err = _get_conn(name)
     if err:
         return err
@@ -269,7 +288,7 @@ def _do_schema(args):
         cur = conn.cursor()
         db_type = (_CFG[name].get("type") or "sqlite").lower()
         if db_type == "sqlite":
-            cur.execute(f"PRAGMA table_info({table})")
+            cur.execute(f'PRAGMA table_info("{table}")')
             rows = cur.fetchall()
             if not rows:
                 return f"表 '{table}' 不存在或无法读取"
@@ -279,7 +298,7 @@ def _do_schema(args):
                 lines.append(f"  {c[1]}  {c[2]}{'  PK' if c[5] else ''}{'  NOT NULL' if c[3] else ''}")
             return f"表 [{name}].{table} 结构:\n" + "\n".join(lines)
         if db_type == "mysql":
-            cur.execute(f"DESCRIBE {table}")
+            cur.execute(f"DESCRIBE `{table}`")
             rows = cur.fetchall()
         else:
             cur.execute(
