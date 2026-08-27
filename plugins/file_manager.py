@@ -49,9 +49,16 @@ def _root():
 
 
 def _resolve(path):
-    if os.path.isabs(path):
-        return path
-    return os.path.join(_root(), path)
+    """解析为绝对路径，并强制约束在工作区根目录内，防止路径穿越。
+
+    相对路径与绝对路径均经 realpath 规范化后校验，越界则抛 ValueError，
+    由 execute 统一捕获并返回友好错误。
+    """
+    root_real = os.path.realpath(_root())
+    candidate = os.path.realpath(os.path.join(_root(), path))
+    if candidate != root_real and not candidate.startswith(root_real + os.sep):
+        raise ValueError(f"路径越界，禁止访问工作区之外的位置: {path}")
+    return candidate
 
 
 def _is_protected(path):
@@ -373,5 +380,8 @@ def execute(name, arguments):
     }
     fn = handlers.get(name)
     if fn:
-        return fn(arguments)
+        try:
+            return fn(arguments)
+        except ValueError as e:
+            return f"错误: {e}"
     return f"未知工具: {name}"

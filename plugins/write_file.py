@@ -103,10 +103,11 @@ TOOLS = [
 
 
 def _safe_path(filepath):
-    """解析为安全路径：绝对路径原样返回；相对路径解析到工作区根目录
-    （优先配置里的 workspace_root，否则回退项目根目录）"""
-    if os.path.isabs(filepath):
-        return filepath
+    """解析为安全路径，并强制约束在工作区根目录内，防止路径穿越。
+
+    使用 realpath 规范化（解析 ../、符号链接、冗余分隔符），最终路径必须
+    位于工作区根目录之下，否则抛 ValueError。相对路径与绝对路径一视同仁。
+    """
     root = os.path.dirname(os.path.abspath(__file__))
     try:
         from qwen_app.config import load_config
@@ -118,7 +119,15 @@ def _safe_path(filepath):
             root = os.path.abspath(os.path.join(root, ".."))
     except Exception:
         root = os.path.abspath(os.path.join(root, ".."))
-    return os.path.join(root, filepath)
+    root = os.path.abspath(root)
+    root_real = os.path.realpath(root)
+
+    candidate = os.path.realpath(os.path.join(root, filepath))
+    if candidate != root_real and not candidate.startswith(root_real + os.sep):
+        raise ValueError(
+            f"路径越界，禁止访问工作区目录之外的位置: {filepath}"
+        )
+    return candidate
 
 
 def execute(name, arguments):
@@ -141,14 +150,17 @@ def _write(args):
     if not filename:
         return "错误: 未提供文件名"
 
-    path = _safe_path(filename)
+    try:
+        path = _safe_path(filename)
+    except ValueError as e:
+        return f"错误: {e}"
 
-    # 安全检查：阻止覆盖程序核心文件
+    # 安全检查：阻止覆盖程序核心文件（按文件名比较，不依赖路径）
     unsafe_names = {"main.py", "chat_window.py", "worker.py", "tools.py",
                     "config.py", "sanitizer.py", "plugin_manager.py",
                     "model_config.json"}
-    if filename.lower() in unsafe_names:
-        return f"错误: 不能覆盖核心文件 '{filename}'，请使用其他文件名。"
+    if os.path.basename(filename).lower() in unsafe_names:
+        return f"错误: 不能覆盖核心文件 '{os.path.basename(filename)}'，请使用其他文件名。"
 
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -178,7 +190,10 @@ def _append(args):
     if not filename:
         return "错误: 未提供文件名"
 
-    path = _safe_path(filename)
+    try:
+        path = _safe_path(filename)
+    except ValueError as e:
+        return f"错误: {e}"
 
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -206,7 +221,10 @@ def _read(args):
     if not filepath:
         return "错误: 未提供文件路径"
 
-    path = _safe_path(filepath)
+    try:
+        path = _safe_path(filepath)
+    except ValueError as e:
+        return f"错误: {e}"
     if not os.path.exists(path):
         return f"错误: 文件不存在 - {path}"
 
