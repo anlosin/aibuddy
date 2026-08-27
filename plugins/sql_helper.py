@@ -36,9 +36,62 @@ SYSTEM_PROMPT = """你是一个资深数据库专家，精通 MySQL、PostgreSQL
 CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "db_connections.json")
 
 # 写操作关键字（只读模式下拦截）
-WRITE_RE = re.compile(
-    r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|GRANT|REVOKE"
-    r"|MERGE|ATTACH|DETACH)\b", re.IGNORECASE)
+# 说明：旧版 WRITE_RE 只匹配行首关键字，可被前导注释(/* */、--、#)、CTE(WITH)
+# 或分号多语句绕过。现改为「剥离前导注释 + 逐语句检测首位关键字 + WITH 内含写
+# 操作检测」，从结构上封堵绕过。MySQL/PostgreSQL/SQLite 通用。
+_WRITE_KEYWORDS = {
+    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE",
+    "REPLACE", "GRANT", "REVOKE", "MERGE", "ATTACH", "DETACH", "VACUUM",
+    "REINDEX", "REANALYZE", "ANALYZE", "CLUSTER", "RENAME", "COMMENT",
+    "CALL", "SET", "RESET",
+}
+
+
+def _strip_sql_comments(sql):
+    """反复剥离语句前导空白与注释（-- 行注释、# 行注释、/* */ 块注释）。"""
+    while True:
+        sql = sql.lstrip()
+        if sql.startswith("--"):
+            nl = sql.find("\n")
+            sql = sql[nl + 1:] if nl != -1 else ""
+            continue
+        if sql.startswith("#"):
+            nl = sql.find("\n")
+            sql = sql[nl + 1:] if nl != -1 else ""
+            continue
+        if sql.startswith("/*"):
+            end = sql.find("*/")
+            sql = sql[end + 2:] if end != -1 else ""
+            continue
+        return sql
+
+
+def _has_write_statement(sql):
+    """检测 SQL 是否含写语句：先保护字符串字面量再逐语句检测首位关键字。
+
+    步骤：1) 把单/双引号字符串字面量替换为占位符，避免字面量内的分号或
+    写关键字被误判；2) 按分号粗拆多条语句；3) 对每条剥离前导注释后检测
+    首位关键字是否为写关键字；4) CTE(WITH) 内含写操作一并拦截。
+    单个 execute() 在多数驱动下只执行一条语句，仍做多语句检测以堵住分号
+    拼接绕过。误报（如极少数字面量含引号逃逸）只会要求用户显式 read_only=false，
+    属可接受范围；漏报即放行危险写操作，故优先保证不误放。
+    """
+    protected = re.sub(r"'(?:[^']|'')*'", "''", sql)
+    protected = re.sub(r'"(?:[^"]|"")*"', '""', protected)
+    for stmt in protected.split(";"):
+        stmt = _strip_sql_comments(stmt).strip()
+        if not stmt:
+            continue
+        m = re.match(r"([A-Za-z]+)", stmt)
+        if not m:
+            continue
+        kw = m.group(1).upper()
+        if kw in _WRITE_KEYWORDS:
+            return True
+        if kw == "WITH" and re.search(
+                r"\b(INSERT|UPDATE|DELETE|REPLACE|MERGE)\b", stmt, re.IGNORECASE):
+            return True
+    return False
 
 ROW_LIMIT = 500      # 单次查询结果行数上限
 QUERY_TIMEOUT = 30   # 查询超时（秒）
@@ -253,7 +306,7 @@ def _do_query(args):
     read_only = args.get("read_only", True)
     if isinstance(read_only, str):
         read_only = read_only.lower() in ("1", "true", "yes")
-    if read_only and WRITE_RE.match(sql):
+    if read_only and _has_write_statement(sql):
         return ("⛔ 当前为只读模式，已拦截写操作。如需执行，请将 read_only 设为 false"
                 "（并确保你了解风险），或改用数据库管理工具。")
     conn, err = _get_conn(name)
