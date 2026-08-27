@@ -88,120 +88,127 @@ def refresh_conv_list(window):
     max_title_w = max(40, avail - reserved) if avail and avail > 0 else 120
 
     for conv in window.conversations:
-        cid = conv["id"]
-        title = conv.get("title", "新对话") or "新对话"
-        selected = cid == window.current_conv_id
+        _build_conv_row(window, conv, pal, max_title_w, sb_w,
+                        h_margin, v_margin, spacing, icon_w, time_w, btn_w)
 
-        row_widget = QWidget()
-        row_widget.setObjectName(f"convRow_{cid}")
-        # 注意：QListView 在 list 模式下会把 item widget 拉伸到"内容宽"
-        # （= 列表宽 - 边框，含纵向滚动条占位），sizeHint 宽度不生效。
-        # 因此右侧必须预留滚动条宽度，否则 ⋯ 按钮右缘会被视口裁掉、点不到。
-        row_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        row_widget.setMinimumWidth(0)
-        bg_color = pal["conv_sel"] if selected else "transparent"
-        hover_color = pal["conv_sel"] if selected else pal["conv_hover"]
-        row_widget.setStyleSheet(
-            f"QWidget#{row_widget.objectName()} {{ background-color: {bg_color}; border-radius: 6px; }}"
-            f"QWidget#{row_widget.objectName()}:hover {{ background-color: {hover_color}; }}"
-        )
 
-        row_layout = QHBoxLayout(row_widget)
-        row_layout.setContentsMargins(h_margin, v_margin, sb_w + 4, v_margin)
-        row_layout.setSpacing(spacing)
+def _build_conv_row(window, conv, pal, max_title_w, sb_w, h_margin, v_margin,
+                   spacing, icon_w, time_w, btn_w):
+    """构建单条会话列表行 widget 并加入 window.conv_list（QQ 风格：图标+标题+时间+⋯菜单）。"""
+    cid = conv["id"]
+    title = conv.get("title", "新对话") or "新对话"
+    selected = cid == window.current_conv_id
 
-        # 左侧小图标
-        icon = QLabel("💬")
-        icon.setFixedSize(icon_w, icon_w)
-        icon.setStyleSheet(f"background: transparent; font-size: 13px; color: {pal['conv_fg']};")
-        icon.setAlignment(Qt.AlignCenter)
-        row_layout.addWidget(icon)
+    row_widget = QWidget()
+    row_widget.setObjectName(f"convRow_{cid}")
+    # 注意：QListView 在 list 模式下会把 item widget 拉伸到"内容宽"
+    # （= 列表宽 - 边框，含纵向滚动条占位），sizeHint 宽度不生效。
+    # 因此右侧必须预留滚动条宽度，否则 ⋯ 按钮右缘会被视口裁掉、点不到。
+    row_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+    row_widget.setMinimumWidth(0)
+    bg_color = pal["conv_sel"] if selected else "transparent"
+    hover_color = pal["conv_sel"] if selected else pal["conv_hover"]
+    row_widget.setStyleSheet(
+        f"QWidget#{row_widget.objectName()} {{ background-color: {bg_color}; border-radius: 6px; }}"
+        f"QWidget#{row_widget.objectName()}:hover {{ background-color: {hover_color}; }}"
+    )
 
-        # 会话标题（单行省略）
-        label = QLabel()
-        label.setObjectName("convTitle")
-        label.setStyleSheet(f"background: transparent; font-size: 13px; color: {pal['conv_fg']};")
-        label.setCursor(Qt.PointingHandCursor)
-        label.setWordWrap(False)
-        label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        label.setMinimumWidth(0)
-        label.setToolTip(title)
-        flat_title = " ".join(str(title).split())
-        fm = label.fontMetrics()
-        elided = fm.elidedText(flat_title, Qt.ElideRight, max_title_w)
-        label.setFixedWidth(max_title_w)
-        label.setText(elided)
-        row_layout.addWidget(label, 1)
+    row_layout = QHBoxLayout(row_widget)
+    row_layout.setContentsMargins(h_margin, v_margin, sb_w + 4, v_margin)
+    row_layout.setSpacing(spacing)
 
-        # 右侧相对时间
-        time_label = QLabel(_relative_time(conv.get("created_at")))
-        time_label.setObjectName("convTime")
-        time_label.setFixedWidth(time_w)
-        time_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        time_label.setStyleSheet(
-            f"background: transparent; font-size: 11px; color: {pal['conv_time']};"
-        )
-        time_label.setToolTip(str(conv.get("created_at", "")))
-        row_layout.addWidget(time_label)
+    # 左侧小图标
+    icon = QLabel("💬")
+    icon.setFixedSize(icon_w, icon_w)
+    icon.setStyleSheet(f"background: transparent; font-size: 13px; color: {pal['conv_fg']};")
+    icon.setAlignment(Qt.AlignCenter)
+    row_layout.addWidget(icon)
 
-        # 更多操作按钮：默认透明隐藏，hover 行时才显示
-        btn = QLabel("⋯")
-        btn.setObjectName("btnConvMenu")
-        btn.setAlignment(Qt.AlignCenter)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedSize(btn_w, btn_w)
-        transparent_ss = (
-            "QLabel#btnConvMenu { background: transparent; color: transparent;"
-            " font-size: 14px; border-radius: 4px; }}"
-        )
-        visible_ss = (
-            f"QLabel#btnConvMenu {{ color: {pal['conv_fg']};"
-            f" background-color: {pal['conv_hover']}; font-size: 14px;"
-            f" border-radius: 4px; }}"
-        )
-        btn.setStyleSheet(transparent_ss)
-        btn.mousePressEvent = lambda e, cid=cid, title=title, btn=btn: show_conv_menu(window, cid, title, btn)
-        row_layout.addWidget(btn)
+    # 会话标题（单行省略）
+    label = QLabel()
+    label.setObjectName("convTitle")
+    label.setStyleSheet(f"background: transparent; font-size: 13px; color: {pal['conv_fg']};")
+    label.setCursor(Qt.PointingHandCursor)
+    label.setWordWrap(False)
+    label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+    label.setMinimumWidth(0)
+    label.setToolTip(title)
+    flat_title = " ".join(str(title).split())
+    fm = label.fontMetrics()
+    elided = fm.elidedText(flat_title, Qt.ElideRight, max_title_w)
+    label.setFixedWidth(max_title_w)
+    label.setText(elided)
+    row_layout.addWidget(label, 1)
 
-        # 行 hover 时显示菜单按钮；鼠标移出（且不在按钮上）时隐藏
-        def _make_enter(b, vs):
-            def _enter(_e):
-                b.setStyleSheet(vs)
-            return _enter
+    # 右侧相对时间
+    time_label = QLabel(_relative_time(conv.get("created_at")))
+    time_label.setObjectName("convTime")
+    time_label.setFixedWidth(time_w)
+    time_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+    time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    time_label.setStyleSheet(
+        f"background: transparent; font-size: 11px; color: {pal['conv_time']};"
+    )
+    time_label.setToolTip(str(conv.get("created_at", "")))
+    row_layout.addWidget(time_label)
 
-        def _make_leave(rw, b, ts):
-            def _leave(_e):
-                pos = rw.mapFromGlobal(QCursor.pos())
-                if not rw.rect().contains(pos):
-                    b.setStyleSheet(ts)
-            return _leave
+    # 更多操作按钮：默认透明隐藏，hover 行时才显示
+    btn = QLabel("⋯")
+    btn.setObjectName("btnConvMenu")
+    btn.setAlignment(Qt.AlignCenter)
+    btn.setCursor(Qt.PointingHandCursor)
+    btn.setFixedSize(btn_w, btn_w)
+    transparent_ss = (
+        "QLabel#btnConvMenu { background: transparent; color: transparent;"
+        " font-size: 14px; border-radius: 4px; }}"
+    )
+    visible_ss = (
+        f"QLabel#btnConvMenu {{ color: {pal['conv_fg']};"
+        f" background-color: {pal['conv_hover']}; font-size: 14px;"
+        f" border-radius: 4px; }}"
+    )
+    btn.setStyleSheet(transparent_ss)
+    btn.mousePressEvent = lambda e, cid=cid, title=title, btn=btn: show_conv_menu(window, cid, title, btn)
+    row_layout.addWidget(btn)
 
-        row_widget.enterEvent = _make_enter(btn, visible_ss)
-        row_widget.leaveEvent = _make_leave(row_widget, btn, transparent_ss)
+    # 行 hover 时显示菜单按钮；鼠标移出（且不在按钮上）时隐藏
+    def _make_enter(b, vs):
+        def _enter(_e):
+            b.setStyleSheet(vs)
+        return _enter
 
-        # 点击图标 / 标题 / 时间均可切换会话
-        for w in (icon, label, time_label):
-            w.mousePressEvent = lambda e, cid=cid: select_conv_by_id(window, cid)
+    def _make_leave(rw, b, ts):
+        def _leave(_e):
+            pos = rw.mapFromGlobal(QCursor.pos())
+            if not rw.rect().contains(pos):
+                b.setStyleSheet(ts)
+        return _leave
 
-        item = QListWidgetItem()
-        item.setData(Qt.UserRole, cid)
-        # 只取行高；宽度锁到视口，避免 item 自然宽度撑出横向滚动条。
-        # 兜底关键：setup_ui 阶段窗口未 show，viewport 可能是 0 或默认大宽度，
-        # 若把 item 锁成 0/过窄，行被压扁、⋯ 按钮被裁出视口 → 点不到。
-        rh = row_widget.sizeHint()
-        vp_w = window.conv_list.viewport().width()
-        list_w = window.conv_list.width()
-        item_w = vp_w if vp_w and vp_w > 0 else (list_w if list_w and list_w > 0 else 240)
-        item_w = max(item_w, 80)  # 仅防 0/极小值；有真实视口宽时优先用真实值
-        # 强制行 widget 宽度与 item 一致，QListWidget 在部分环境下不会自动拉伸 widget
-        row_widget.setFixedWidth(item_w)
-        item.setSizeHint(QSize(item_w, rh.height()))
-        window._conv_vp_w = vp_w  # 记住本次视口宽，供 resize 过滤器判断是否需要重建
-        window.conv_list.addItem(item)
-        window.conv_list.setItemWidget(item, row_widget)
-        if selected:
-            item.setSelected(True)
+    row_widget.enterEvent = _make_enter(btn, visible_ss)
+    row_widget.leaveEvent = _make_leave(row_widget, btn, transparent_ss)
+
+    # 点击图标 / 标题 / 时间均可切换会话
+    for w in (icon, label, time_label):
+        w.mousePressEvent = lambda e, cid=cid: select_conv_by_id(window, cid)
+
+    item = QListWidgetItem()
+    item.setData(Qt.UserRole, cid)
+    # 只取行高；宽度锁到视口，避免 item 自然宽度撑出横向滚动条。
+    # 兜底关键：setup_ui 阶段窗口未 show，viewport 可能是 0 或默认大宽度，
+    # 若把 item 锁成 0/过窄，行被压扁、⋯ 按钮被裁出视口 → 点不到。
+    rh = row_widget.sizeHint()
+    vp_w = window.conv_list.viewport().width()
+    list_w = window.conv_list.width()
+    item_w = vp_w if vp_w and vp_w > 0 else (list_w if list_w and list_w > 0 else 240)
+    item_w = max(item_w, 80)  # 仅防 0/极小值；有真实视口宽时优先用真实值
+    # 强制行 widget 宽度与 item 一致，QListWidget 在部分环境下不会自动拉伸 widget
+    row_widget.setFixedWidth(item_w)
+    item.setSizeHint(QSize(item_w, rh.height()))
+    window._conv_vp_w = vp_w  # 记住本次视口宽，供 resize 过滤器判断是否需要重建
+    window.conv_list.addItem(item)
+    window.conv_list.setItemWidget(item, row_widget)
+    if selected:
+        item.setSelected(True)
 
 
 def load_current_conv(window):

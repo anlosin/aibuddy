@@ -88,7 +88,31 @@ class ChatWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ── 左侧边栏 ──
+        self._setup_sidebar(main_layout)
+        self._setup_chat_area(main_layout)
+
+        # 状态栏
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_label = QLabel()
+        self.status_label.setStyleSheet("color: #666; padding: 0 8px;")
+        self.status_bar.addPermanentWidget(self.status_label)
+        self.update_status()
+
+        self.create_menu()
+        self._setup_copy_handler()
+
+        # 注入主题（浅色 / 深色）样式；聊天内容由下方按会话加载渲染
+        self.apply_theme(rerender_chat=False)
+
+        if not self.conversations:
+            new_conversation(self)
+        else:
+            refresh_conv_list(self)
+            load_current_conv(self)
+
+    def _setup_sidebar(self, main_layout):
+        """构建左侧边栏：标题栏 + 会话列表 + 底部主题/设置按钮。"""
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(240)
@@ -134,7 +158,8 @@ class ChatWindow(QMainWindow):
 
         main_layout.addWidget(sidebar)
 
-        # ── 右侧聊天区 ──
+    def _setup_chat_area(self, main_layout):
+        """构建右侧聊天区：专家选择条 + 消息显示 + 输入栏。"""
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -178,26 +203,6 @@ class ChatWindow(QMainWindow):
 
         right_layout.addWidget(input_frame)
         main_layout.addWidget(right_panel, stretch=1)
-
-        # 状态栏
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #666; padding: 0 8px;")
-        self.status_bar.addPermanentWidget(self.status_label)
-        self.update_status()
-
-        self.create_menu()
-        self._setup_copy_handler()
-
-        # 注入主题（浅色 / 深色）样式；聊天内容由下方按会话加载渲染
-        self.apply_theme(rerender_chat=False)
-
-        if not self.conversations:
-            new_conversation(self)
-        else:
-            refresh_conv_list(self)
-            load_current_conv(self)
 
     # ═══════════════════════════════════════════════
     #  客户端 & 设置
