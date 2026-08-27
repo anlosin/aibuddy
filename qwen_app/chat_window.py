@@ -570,17 +570,20 @@ class ChatWindow(QMainWindow):
         WorkerThread.run() 每收到一个 chunk、每轮、每次工具调用后都会检查停止
         信号并安全关闭连接，通常在下一个 chunk 到达前即可干净退出；极端情况下
         线程阻塞在 recv 等待网络数据，会随 socket 超时（API_TIMEOUT）自行释放。
+
+        注意：self.worker_thread 在 wait 之前就置 None，避免超时后线程成为
+        孤儿（后续 on_stop_response 检查 self.worker_thread 时不会重复停止）。
         """
         wt = self.worker_thread
         if wt is None:
             return
-        wt.stop()                        # 置位 _stop_event
-        if not wt.wait(timeout_ms):      # 等待其自行结束
+        self.worker_thread = None          # 先置 None，防止重复调用
+        wt.stop()                          # 置位 _stop_event
+        if not wt.wait(timeout_ms):        # 等待其自行结束
             # 等待超时：极可能是网络阻塞在 recv，不 terminate()，仅告警，
             # 让线程随 stream 超时自然退出，避免强行杀线程带来的不确定后果。
             print(f"[warn] 后台回复线程未在 {timeout_ms}ms 内退出，"
                   f"等待其随网络超时自行结束（未使用 terminate）")
-        self.worker_thread = None
 
     # ── 格式化 ──
 
