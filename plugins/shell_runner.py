@@ -33,15 +33,25 @@ SYSTEM_PROMPT = """你拥有在本地机器执行命令和脚本的能力（shel
 """
 
 # ── 破坏性命令黑名单：命中直接拒绝执行 ──
+# 说明：run_command 保留 shell=True 以支持管道/重定向/内建命令（这是本插件
+# "干活"能力的核心），因此安全边界压缩到黑名单广度。黑名单覆盖越权重命名、
+# 参数变体(-rf/-fr/-r -f)、家目录/敏感绝对路径删除、Windows PowerShell/CMD
+# 递归删除、远程下载执行器等，尽力收缩绕过空间。仍无法穷尽的场景，建议
+# 复杂/危险任务走 run_script 先落盘人工审查再执行。
 BLOCKED_PATTERNS = [
-    r"\brm\s+-rf\s+/",            # rm -rf /
-    r"\brm\s+-rf\s+/\*",          # rm -rf /*
-    r"\brd\s+/s",                 # rd /s (Windows)
-    r"\bdel\s+/[sqf]",            # del /s /q /f (Windows)
+    # ── rm 递归删除：覆盖 -rf/-fr/-r -f/--recursive 参数变体 + 根/家目录/敏感绝对路径 ──
+    r"\brm\b[^\n|&;]*?(?:-\w*[rR]+\w*|--recursive)[^\n|&;]*?[\s\'\"\"]+(/|~|\$\{?HOME\}?)",
+    # ── Windows 递归/强制删除 ──
+    r"\bRemove-Item\b[^|\n]*-(Recurse|Force|r)\b.*-Force\b",   # PowerShell 递归强制
+    r"\brd\s+/[sq]\b",                                        # rd /s /q
+    r"\bdel\s+/[sqf]\b",                                      # del /s /q /f
+    # ── 危险单条命令 / 格式化 / 写设备 ──
     r"\bformat\s+[a-z]:",         # format C:
     r"\bmkfs",                    # mkfs*
     r"\bdd\s+if=.*of=/dev/",      # dd 写设备
     r">\s*/dev/sd",               # 覆盖磁盘设备
+    r"\btruncate\s+-s\s+0\s+/",   # truncate 设备
+    # ── fork bomb / 关机 / 分区 / 权限破坏 ──
     r":\(\).*\{\s*:\|:",          # fork bomb
     r"\bshutdown\b",              # shutdown
     r"\breboot\b",                # reboot
@@ -51,8 +61,10 @@ BLOCKED_PATTERNS = [
     r"\bparted\b",                # parted
     r"\bchmod\s+-R\s+0",          # chmod -R 000
     r"\bDISM\b",                  # DISM
-    r"\btruncate\s+-s\s+0\s+/",   # truncate 设备
     r"\bmkfs\.",                  # mkfs.ext4 等
+    # ── 远程下载并执行（curl|wget ... | sh/bash / xargs sh）──
+    r"\b(curl|wget)\b[^|\n]*\|\s*(sh|bash|zsh|cmd|powershell)\b",
+    r"\bxargs\b[^|\n]*\s(sh|bash|zsh)\b",
 ]
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
 
