@@ -1,4 +1,6 @@
 """网页抓取插件 — 读取网页内容并提取纯文本"""
+import ipaddress
+import socket
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -70,6 +72,50 @@ def _clean_text(text):
     return "\n".join(cleaned)
 
 
+def _is_public_ip(ip_str):
+    """判断 IP 是否为公网地址，拒绝私有/回环/链路本地/保留地址段（防 SSRF）。"""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _validate_url_safe(url):
+    """校验 URL 目标地址是否安全，禁止访问内网/元数据等地址（防 SSRF）。
+
+    解析 host 并对所有 DNS 解析结果做 IP 校验，命中私有/回环/链路本地/
+    保留地址即抛 ValueError。file:// 等非 http(s) 协议在调用前已被限制。
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("仅支持 http/https 协议")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("无法解析目标主机")
+    # 1) host 是 IP 字面量（含 IPv6）→ 直接校验地址段
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not _is_public_ip(str(literal)):
+            raise ValueError(f"禁止访问内网/保留地址: {host}")
+        return host
+    # 2) host 是域名 → DNS 解析后逐 IP 校验
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ValueError(f"域名解析失败: {host}")
+    for info in infos:
+        addr = info[4][0]
+        if not _is_public_ip(addr):
+            raise ValueError(f"禁止访问内网/保留地址: {host} -> {addr}")
+    return host
+
+
 def execute(name, arguments):
     if name != "fetch_webpage":
         return f"未知工具: {name}"
@@ -80,6 +126,11 @@ def execute(name, arguments):
 
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+
+    try:
+        _validate_url_safe(url)  # SSRF 防护：拒绝内网/回环/元数据等地址
+    except ValueError as e:
+        return f"⛔ 安全拦截: {e}"
 
     try:
         req = urllib.request.Request(
