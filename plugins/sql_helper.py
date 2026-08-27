@@ -59,9 +59,21 @@ def _load_cfg():
 
 
 def _save_cfg():
+    """持久化连接配置，剔除密码字段，避免明文落盘。
+
+    密码仅保留在内存 _CFG 中供当前会话复用；重启后需重新 db_connect 提供。
+    """
     try:
+        sanitized = {}
+        for name, cfg in _CFG.items():
+            if isinstance(cfg, dict):
+                c = dict(cfg)
+                c.pop("password", None)
+                sanitized[name] = c
+            else:
+                sanitized[name] = cfg
         with open(CONN_FILE, "w", encoding="utf-8") as f:
-            json.dump(_CFG, f, ensure_ascii=False, indent=2)
+            json.dump(sanitized, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
