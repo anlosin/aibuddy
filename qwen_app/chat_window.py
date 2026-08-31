@@ -17,7 +17,9 @@ from PyQt5.QtGui import QTextCharFormat, QColor, QTextCursor, QFont, QKeySequenc
 from PyQt5.QtWidgets import QAction
 
 from .worker import WorkerThread
-from .config import load_config, save_config, load_conversations, save_conversations, load_plugin_state, save_plugin_state, make_openai_client
+from .config import (load_config, save_config, load_conversations, save_conversations,
+                     load_plugin_state, save_plugin_state, make_openai_client,
+                     load_models, save_models, get_current_model)
 from .sanitizer import sanitize
 from .tools import DEFAULT_CONFIG
 from .plugin_manager import discover_plugins, get_enabled_tools, dispatch_tool, compare_versions, get_plugin_meta, get_system_prompts
@@ -33,7 +35,7 @@ from .session import (get_current_conv, new_conversation, on_conv_selected,
                       load_convs, save_convs, select_conv_by_id, show_conv_menu,
                       rename_conversation, delete_conversation)
 from .settings_dialog import (show_settings, show_plugin_manager,
-                              reload_plugins)
+                              reload_plugins, show_model_manager)
 
 
 class ChatWindow(QMainWindow):
@@ -224,6 +226,16 @@ class ChatWindow(QMainWindow):
 
     def _load_settings(self):
         cfg = load_config()
+        # 多模型注册表：确保迁移完成，并以「当前激活模型」回填激活字段
+        _models, _cur = load_models()
+        self.current_model_id = _cur
+        cur_model = get_current_model() or {}
+        if cur_model:
+            # 注册表中的激活模型优先于旧扁平字段（二者本就同步）
+            for k in ("base_url", "api_key", "model_id", "proxy",
+                      "enable_thinking", "enable_tools"):
+                if cur_model.get(k) not in (None, ""):
+                    cfg[k] = cur_model[k]
         self.model_id = cfg.get("model_id", DEFAULT_CONFIG["model_id"])
         self.api_key = cfg.get("api_key", DEFAULT_CONFIG["api_key"])
         self.base_url = cfg.get("base_url", DEFAULT_CONFIG["base_url"])
@@ -234,6 +246,54 @@ class ChatWindow(QMainWindow):
         self.max_agent_rounds = cfg.get("max_agent_rounds", DEFAULT_CONFIG["max_agent_rounds"])
         self.proxy = cfg.get("proxy", DEFAULT_CONFIG.get("proxy", ""))
         self.theme = cfg.get("ui_theme", "light")
+
+    def switch_model(self, model_entry_id):
+        """切换当前激活模型：从注册表拷贝字段 → 重建 client → 持久化。
+
+        只影响下一次请求；正在流式输出的 WorkerThread 已持有旧 client
+        引用，不受影响。
+        """
+        models, _ = load_models()
+        target = next((m for m in models if m.get("id") == model_entry_id), None)
+        if not target:
+            self.display_message("系统", f"切换失败：找不到模型 id={model_entry_id}", "system")
+            return
+        self.current_model_id = model_entry_id
+        self.base_url = target.get("base_url", "")
+        self.api_key = target.get("api_key", "")
+        self.model_id = target.get("model_id", "")
+        self.proxy = target.get("proxy", "")
+        self.enable_thinking = bool(target.get("enable_thinking", True))
+        self.enable_tools = bool(target.get("enable_tools", False))
+        save_models(models, model_entry_id)
+        self.setup_client()
+        # 同步「模型设置」对话框会读的旧扁平字段（_save_settings 会写回）
+        self._save_settings()
+        self.display_message(
+            "系统",
+            f"已切换模型 → {target.get('name') or target.get('model_id')}"
+            f"（{target.get('model_id')} @ {target.get('base_url')}）",
+            "system")
+        self.update_status()
+
+    def _rebuild_model_menu(self, model_menu):
+        """每次展开「模型」菜单时动态重建（checkable 单选 + 管理入口）"""
+        model_menu.clear()
+        models, current_id = load_models()
+        if not models:
+            empty = model_menu.addAction("（暂无模型，请先添加）")
+            empty.setEnabled(False)
+        for m in models:
+            mid = m.get("id")
+            label = f"{'●' if mid == current_id else '○'} {m.get('name') or m.get('model_id')}"
+            if m.get("model_id") and m.get("name"):
+                label += f"  ({m['model_id']})"
+            act = model_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(mid == current_id)
+            act.triggered.connect(lambda checked, _mid=mid: self.switch_model(_mid))
+        model_menu.addSeparator()
+        model_menu.addAction("模型管理...", lambda: show_model_manager(self))
 
     def _save_settings(self):
         save_config({
@@ -273,6 +333,10 @@ class ChatWindow(QMainWindow):
         settings_menu = menubar.addMenu("设置")
         settings_menu.addAction("模型设置...", lambda: show_settings(self))
         settings_menu.addAction("插件管理...", lambda: show_plugin_manager(self))
+
+        # ── 模型菜单（多模型快捷切换 + 管理）──
+        model_menu = menubar.addMenu("模型")
+        model_menu.aboutToShow.connect(lambda: self._rebuild_model_menu(model_menu))
 
         # ── 自动化菜单（定时任务 + 按次记录结果）──
         auto_menu = menubar.addMenu("自动化")
