@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 # 注意：dispatch_tool 在下方有同名模块级包装函数（复用 plugin_manager），故此处不导入；
 #       get_system_prompts 仅在 _build_system_prompt 内本地导入使用，亦不在此导入。
 from .plugin_manager import get_enabled_tools
+from .config import load_models, make_openai_client
 
 # scheduler.py 位于 qwen_app/ 内，运行时数据（automations.json 等）统一在 data/
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -194,6 +195,39 @@ def _build_system_prompt(plugins, enabled_plugins, enable_tools):
     return "\n\n".join(parts) if parts else "你是一个能干活的智能助手。"
 
 
+def resolve_automation_client(auto, parent_client, parent_model_id):
+    """解析任务执行模型：任务指定了 model_id（注册表 id）则用注册表中
+    对应模型构建专属 client；未指定（空/"main"）或解析失败时回退主模型。
+
+    返回 (client, model_id, model_label, error)
+    - model_label: 模型显示名，用于执行日志
+    - error: 仅当任务指定的模型存在但配置不完整/已删除时给出提示文本
+      （此时仍回退主模型执行，不中断任务）
+    """
+    target = (auto.get("model_id") or "").strip()
+    if not target or target == "main":
+        return parent_client, parent_model_id, "跟随主模型", ""
+
+    models, _ = load_models()
+    m = next((x for x in models if x.get("id") == target), None)
+    if not m:
+        return (parent_client, parent_model_id, "跟随主模型",
+                f"任务指定模型已不存在(id={target})，已回退主模型")
+    if not m.get("api_key") or not m.get("base_url"):
+        return (parent_client, parent_model_id,
+                m.get("name") or m.get("model_id", ""),
+                f"任务指定模型「{m.get('name', target)}」缺少 api_key/base_url，已回退主模型")
+    try:
+        client = make_openai_client(m.get("api_key"), m.get("base_url"),
+                                    m.get("proxy", ""))
+    except Exception as e:
+        return (parent_client, parent_model_id,
+                m.get("name") or m.get("model_id", ""),
+                f"任务指定模型构建客户端失败({e})，已回退主模型")
+    return (client, m.get("model_id", ""),
+            f"{m.get('name', '')}({m.get('model_id', '')})", "")
+
+
 def run_automation(auto, client, model_id, plugins, enabled_plugins,
                     enable_thinking, enable_tools, max_rounds):
     """无界面执行一个自动化任务，返回 (final_text, tool_logs, error)
@@ -352,14 +386,20 @@ class Scheduler:
         with self._lock:
             if auto.get("id") in self._running:
                 return None, "该任务正在执行中"
+        # 按任务配置解析执行模型（未指定则跟随主模型）
+        client, model_id, model_label, m_err = resolve_automation_client(
+            auto, self.client, self.model_id)
         started = datetime.now()
         final, tool_logs, error = run_automation(
-            auto, self.client, self.model_id, self.plugins,
+            auto, client, model_id, self.plugins,
             self.enabled_plugins, self.enable_thinking, self.enable_tools,
             auto.get("max_rounds", self.max_rounds))
+        if m_err:
+            error = (m_err + ("；" + error if error else "")) if error else m_err
         finished = datetime.now()
         status = "error" if error else "ok"
-        self._record(auto, started, finished, status, final, tool_logs, error)
+        self._record(auto, started, finished, status, final, tool_logs, error,
+                     model_label)
         return final, error
 
     def _run_one(self, auto):
@@ -368,13 +408,19 @@ class Scheduler:
             self._running.add(aid)
         try:
             started = datetime.now()
+            # 按任务配置解析执行模型（未指定则跟随主模型）
+            client, model_id, model_label, m_err = resolve_automation_client(
+                auto, self.client, self.model_id)
             final, tool_logs, error = run_automation(
-                auto, self.client, self.model_id, self.plugins,
+                auto, client, model_id, self.plugins,
                 self.enabled_plugins, self.enable_thinking, self.enable_tools,
                 auto.get("max_rounds", self.max_rounds))
+            if m_err:
+                error = (m_err + ("；" + error if error else "")) if error else m_err
             finished = datetime.now()
             status = "error" if error else "ok"
-            self._record(auto, started, finished, status, final, tool_logs, error)
+            self._record(auto, started, finished, status, final, tool_logs, error,
+                         model_label)
             if self.on_log:
                 try:
                     self.on_log(auto.get("name", aid), status)
@@ -388,7 +434,8 @@ class Scheduler:
             with self._lock:
                 self._running.discard(aid)
 
-    def _record(self, auto, started, finished, status, final, tool_logs, error):
+    def _record(self, auto, started, finished, status, final, tool_logs, error,
+                model_label=""):
         aid = auto.get("id")
         auto["last_run"] = started.isoformat()
         auto["last_status"] = status
@@ -400,6 +447,7 @@ class Scheduler:
             lines = []
             lines.append("# 自动化任务执行记录\n")
             lines.append(f"- **任务**: {auto.get('name', aid)}")
+            lines.append(f"- **模型**: {model_label or '跟随主模型'}")
             lines.append(f"- **时间**: {started.strftime('%Y-%m-%d %H:%M:%S')} → "
                         f"{finished.strftime('%Y-%m-%d %H:%M:%S')}")
             lines.append(f"- **状态**: {status}")
@@ -424,6 +472,7 @@ class Scheduler:
             "run_id": f"{aid}_{ts}",
             "automation_id": aid,
             "name": auto.get("name", aid),
+            "model": model_label or "跟随主模型",
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
             "status": status,
@@ -439,7 +488,8 @@ class Scheduler:
         save_automations(self.automations)
 
     # ── 任务增删改（供 UI 调用）──
-    def add_automation(self, name, prompt, schedule, enabled=True, max_rounds=None):
+    def add_automation(self, name, prompt, schedule, enabled=True, max_rounds=None,
+                       model_id=""):
         auto = {
             "id": uuid.uuid4().hex[:12],
             "name": name,
@@ -447,6 +497,7 @@ class Scheduler:
             "schedule": schedule,
             "enabled": enabled,
             "max_rounds": max_rounds if max_rounds else self.max_rounds,
+            "model_id": model_id or "",  # 空 = 跟随主模型；否则为模型注册表 id
             "created_at": datetime.now().isoformat(),
             "last_run": None,
             "last_status": None,

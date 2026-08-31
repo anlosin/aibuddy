@@ -37,23 +37,25 @@ import qwen_app.scheduler as scheduler
 
 
 def build_scheduler():
-    cfg = config.load_config()
+    # 主模型跟随多模型注册表的「当前激活模型」(current_model)，
+    # 与桌面应用保持一致；旧扁平配置会被自动迁移为默认模型。
+    cur = config.get_current_model() or {}
     client = config.make_openai_client(
-        cfg.get("api_key", ""),
-        cfg.get("base_url", ""),
-        cfg.get("proxy", ""),
+        cur.get("api_key", ""),
+        cur.get("base_url", ""),
+        cur.get("proxy", ""),
     )
     plugins, _ = discover_plugins()
     enabled = config.load_plugin_state()
     enabled = [p for p in enabled if p in plugins]
     sch = scheduler.Scheduler(
         client=client,
-        model_id=cfg.get("model_id", ""),
+        model_id=cur.get("model_id", ""),
         plugins=plugins,
         enabled_plugins=enabled,
-        enable_thinking=cfg.get("enable_thinking", True),
-        enable_tools=cfg.get("enable_tools", True),
-        max_rounds=cfg.get("max_agent_rounds", 12),
+        enable_thinking=cur.get("enable_thinking", True),
+        enable_tools=cur.get("enable_tools", True),
+        max_rounds=config.load_config().get("max_agent_rounds", 12),
     )
     return sch
 

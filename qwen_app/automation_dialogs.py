@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (QDialog, QWidget, QTableWidget, QTableWidgetItem,
                              QDialogButtonBox, QHeaderView, QAbstractItemView)
 
 from .scheduler import describe_schedule, next_run_time
+from .config import load_models
 
 
 # ── 状态配色 ──
@@ -109,9 +110,9 @@ class AutomationManagerDialog(QDialog):
         layout.addLayout(bar)
 
         # ── 任务表格 ──
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["任务名称", "周期", "下次执行", "上次状态", "启用"])
+            ["任务名称", "周期", "模型", "下次执行", "上次状态", "启用"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -124,6 +125,7 @@ class AutomationManagerDialog(QDialog):
         h_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         h_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         h_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        h_header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table.doubleClicked.connect(self._edit_selected)
         layout.addWidget(self.table, 1)
 
@@ -182,13 +184,28 @@ class AutomationManagerDialog(QDialog):
             self.table.setItem(row, 1, QTableWidgetItem(
                 describe_schedule(a.get("schedule", {}))))
 
+            # 执行模型（空 = 跟随主模型；显示注册表中的模型名）
+            mid = a.get("model_id", "")
+            if mid:
+                models, _ = load_models()
+                m = next((x for x in models if x.get("id") == mid), None)
+                model_txt = (m.get("name") or m.get("model_id", mid)) if m \
+                    else f"(已删除 {mid})"
+                model_color = _STATUS_UNKNOWN if not m else _ACCENT
+            else:
+                model_txt = "跟随主模型"
+                model_color = _STATUS_UNKNOWN
+            model_item = QTableWidgetItem(model_txt)
+            model_item.setForeground(model_color)
+            self.table.setItem(row, 2, model_item)
+
             # 下次执行
             if a.get("enabled", True):
                 nxt = next_run_time(a, now)
                 nxt_txt = nxt.strftime("%m-%d %H:%M") if nxt else "—"
             else:
                 nxt_txt = "（已禁用）"
-            self.table.setItem(row, 2, QTableWidgetItem(nxt_txt))
+            self.table.setItem(row, 3, QTableWidgetItem(nxt_txt))
 
             # 上次状态（彩色徽标）
             status = a.get("last_status")
@@ -204,23 +221,23 @@ class AutomationManagerDialog(QDialog):
             st_item = QTableWidgetItem(mark)
             st_item.setForeground(color)
             st_item.setFont(QFont("", -1, QFont.Bold))
-            self.table.setItem(row, 3, st_item)
+            self.table.setItem(row, 4, st_item)
 
             # 启用开关（内联复选框）
             chk = QTableWidgetItem()
             chk.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
             chk.setTextAlignment(Qt.AlignCenter)
             chk.setData(Qt.UserRole, aid)
-            self.table.setItem(row, 4, chk)
+            self.table.setItem(row, 5, chk)
 
-        self.table.resizeColumnToContents(2)
+        self.table.resizeColumnToContents(3)
         self._apply_filter()
         if prev:
             self._select_by_id(prev)
 
-    # ── 启用开关：单击第 5 列切换 ──
+    # ── 启用开关：单击第 6 列切换 ──
     def _on_cell_clicked(self, row, col):
-        if col != 4:
+        if col != 5:
             return
         item = self.table.item(row, col)
         if not item:
@@ -290,6 +307,7 @@ class AutomationManagerDialog(QDialog):
                 schedule=dlg.get_schedule(),
                 enabled=dlg.enabled_chk.isChecked(),
                 max_rounds=dlg.rounds_spin.value(),
+                model_id=dlg.model_combo.currentData() or "",
             )
             self.refresh()
 
@@ -310,6 +328,7 @@ class AutomationManagerDialog(QDialog):
                 schedule=dlg.get_schedule(),
                 enabled=dlg.enabled_chk.isChecked(),
                 max_rounds=dlg.rounds_spin.value(),
+                model_id=dlg.model_combo.currentData() or "",
             )
             self.refresh()
 
@@ -380,8 +399,27 @@ class AutomationEditDialog(QDialog):
         self.rounds_spin.setRange(1, 50)
         self.rounds_spin.setValue(12)
 
+        # ── 执行模型选择：首项「跟随主模型」，其余来自模型注册表 ──
+        self.model_combo = QComboBox()
+        self._model_ids = [""]  # 索引 0 恒为空 = 跟随主模型
+        self.model_combo.addItem("跟随主模型", "")
+        try:
+            models, _ = load_models()
+        except Exception:
+            models = []
+        for m in models:
+            label = m.get("name") or m.get("model_id", "(未命名)")
+            if m.get("model_id"):
+                label += f" ({m['model_id']})"
+            self._model_ids.append(m.get("id", ""))
+            self.model_combo.addItem(label, m.get("id", ""))
+        # 默认「跟随主模型」——运行时动态解析主模型，主模型切换后自动跟随；
+        # 用户可手动改选注册表中的固定模型。
+        self.model_combo.setCurrentIndex(0)
+
         layout.addRow("任务名称:", self.name_edit)
         layout.addRow("任务提示词:", self.prompt_edit)
+        layout.addRow("执行模型:", self.model_combo)
         layout.addRow("工具循环轮次:", self.rounds_spin)
         layout.addRow("", self.enabled_chk)
 
@@ -450,6 +488,9 @@ class AutomationEditDialog(QDialog):
         self.prompt_edit.setPlainText(auto.get("prompt", ""))
         self.enabled_chk.setChecked(auto.get("enabled", True))
         self.rounds_spin.setValue(auto.get("max_rounds", 12))
+        # 恢复任务指定的执行模型（无该字段或为空 = 跟随主模型）
+        idx = self.model_combo.findData(auto.get("model_id", ""))
+        self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)
         sch = auto.get("schedule", {})
         self.type_combo.setCurrentText(sch.get("type", "interval"))
         self.every_spin.setValue(sch.get("every", 1))
