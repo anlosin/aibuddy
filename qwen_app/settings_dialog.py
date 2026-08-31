@@ -16,18 +16,20 @@ from .config import save_plugin_state, load_models, save_models, _new_model_id
 
 
 def show_settings(window):
+    """偏好设置：思考模式、工具调用、工作区、自主模式、主题。
+    模型相关设置（Base URL / API Key / 模型 ID / 代理）请通过「菜单→模型」管理。
+    """
     dlg = QDialog(window)
-    dlg.setWindowTitle("模型设置")
-    dlg.resize(480, 320)
+    dlg.setWindowTitle("偏好设置")
+    dlg.resize(480, 280)
     layout = QFormLayout(dlg)
 
-    le_url = QLineEdit(window.base_url)
-    le_url.setPlaceholderText("https://api.openai.com/v1")
-    le_key = QLineEdit(window.api_key)
-    le_key.setEchoMode(QLineEdit.Password)
-    le_key.setPlaceholderText("sk-...")
-    le_model = QLineEdit(window.model_id)
-    le_model.setPlaceholderText("gpt-4o / DeepSeek-R1-Distill-Qwen-32B")
+    # 顶部提示：引导模型设置走「菜单→模型」
+    hint = QLabel("模型连接（URL / Key / 模型 ID / 代理）请通过「菜单→模型」管理。")
+    hint.setStyleSheet("color:#8A8F99;")
+    hint.setWordWrap(True)
+    layout.addRow(hint)
+
     chk_think = QCheckBox("启用思考模式 (enable_thinking)")
     chk_think.setChecked(window.enable_thinking)
     chk_tools = QCheckBox("启用工具调用 (计算器、时间查询等)")
@@ -54,20 +56,6 @@ def show_settings(window):
     sp_rounds.setValue(window.max_agent_rounds)
     sp_rounds.setSuffix(" 轮")
 
-    layout.addRow("Base URL:", le_url)
-    layout.addRow("API Key:", le_key)
-    layout.addRow("模型ID:", le_model)
-
-    # ── 代理设置（仅作用于模型连接）──
-    le_proxy = QLineEdit(window.proxy or "")
-    le_proxy.setPlaceholderText("http://127.0.0.1:7890 或 socks5://127.0.0.1:7890（留空=不走代理）")
-    chk_proxy = QCheckBox("通过代理连接模型地址（仅作用于模型 API，不影响插件/SSH）")
-    chk_proxy.setChecked(bool(window.proxy))
-    chk_proxy.setToolTip("公司内网需经代理访问模型服务时填写。\n该代理只注入模型客户端，"
-                         "插件自身的 HTTP/SSH 等连接不受影响。")
-    layout.addRow("代理地址:", le_proxy)
-    layout.addRow("", chk_proxy)
-
     layout.addRow("", chk_think)
     layout.addRow("", chk_tools)
     layout.addRow("工作区根目录:", ws_layout)
@@ -88,30 +76,15 @@ def show_settings(window):
     if dlg.exec_() != QDialog.Accepted:
         return
 
-    new_url = le_url.text().strip()
-    new_key = le_key.text().strip()
-    new_model = le_model.text().strip()
     new_ws = le_ws.text().strip()
     new_agent = chk_agent.isChecked()
     new_rounds = sp_rounds.value()
-    new_proxy = le_proxy.text().strip() if chk_proxy.isChecked() else ""
     new_theme = "light" if le_theme.currentText() == "浅色" else "dark"
 
-    if not new_url or not new_key or not new_model:
-        QMessageBox.warning(window, "提示", "Base URL、API Key 和模型ID 不能为空")
-        return
-
-    model_changed = (new_url != window.base_url or new_key != window.api_key
-                     or new_model != window.model_id
-                     or new_proxy != (window.proxy or "")
-                     or chk_think.isChecked() != window.enable_thinking
-                     or chk_tools.isChecked() != window.enable_tools)
+    think_changed = chk_think.isChecked() != window.enable_thinking
+    tools_changed = chk_tools.isChecked() != window.enable_tools
     theme_changed = new_theme != window.theme
 
-    window.base_url = new_url
-    window.api_key = new_key
-    window.model_id = new_model
-    window.proxy = new_proxy
     window.enable_thinking = chk_think.isChecked()
     window.enable_tools = chk_tools.isChecked()
     window.workspace_root = new_ws
@@ -120,14 +93,13 @@ def show_settings(window):
     window.theme = new_theme
     window._save_settings()
 
-    if model_changed:
-        window.setup_client()
-
     if theme_changed:
         window.apply_theme(rerender_chat=True)
 
     window.display_message("系统",
-        f"设置已更新 — 模型: {window.model_id} | 思考: {'开' if window.enable_thinking else '关'} | 工具: {'开' if window.enable_tools else '关'}",
+        f"偏好已更新 — 思考: {'开' if window.enable_thinking else '关'} | "
+        f"工具: {'开' if window.enable_tools else '关'} | "
+        f"主题: {le_theme.currentText()}",
         "system")
 
 

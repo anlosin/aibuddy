@@ -226,19 +226,19 @@ class ChatWindow(QMainWindow):
 
     def _load_settings(self):
         cfg = load_config()
-        # 多模型注册表：确保迁移完成，并以「当前激活模型」回填激活字段
+        # 「当前激活模型」回填激活连接字段（URL/Key/Model/Proxy）。
+        # 行为开关（enable_thinking/enable_tools）保持为全局偏好，不被模型覆盖。
         _models, _cur = load_models()
         self.current_model_id = _cur
         cur_model = get_current_model() or {}
         if cur_model:
-            # 注册表中的激活模型优先于旧扁平字段（二者本就同步）
-            for k in ("base_url", "api_key", "model_id", "proxy",
-                      "enable_thinking", "enable_tools"):
+            for k in ("base_url", "api_key", "model_id", "proxy"):
                 if cur_model.get(k) not in (None, ""):
                     cfg[k] = cur_model[k]
         self.model_id = cfg.get("model_id", DEFAULT_CONFIG["model_id"])
         self.api_key = cfg.get("api_key", DEFAULT_CONFIG["api_key"])
         self.base_url = cfg.get("base_url", DEFAULT_CONFIG["base_url"])
+        # 行为偏好：读顶层（与主模型脱钩），缺省回退 DEFAULT_CONFIG
         self.enable_thinking = cfg.get("enable_thinking", DEFAULT_CONFIG["enable_thinking"])
         self.enable_tools = cfg.get("enable_tools", DEFAULT_CONFIG["enable_tools"])
         self.workspace_root = cfg.get("workspace_root", DEFAULT_CONFIG["workspace_root"])
@@ -263,11 +263,13 @@ class ChatWindow(QMainWindow):
         self.api_key = target.get("api_key", "")
         self.model_id = target.get("model_id", "")
         self.proxy = target.get("proxy", "")
-        self.enable_thinking = bool(target.get("enable_thinking", True))
-        self.enable_tools = bool(target.get("enable_tools", False))
+        # 行为开关已不再与单条模型绑定（属于全局偏好），清理注册表残留
+        # 的 enable_thinking/enable_tools 字段，避免模型管理对话框显示旧值。
+        for k in ("enable_thinking", "enable_tools"):
+            target.pop(k, None)
         save_models(models, model_entry_id)
         self.setup_client()
-        # 同步「模型设置」对话框会读的旧扁平字段（_save_settings 会写回）
+        # 同步「偏好设置」对话框会读的顶层扁平字段（_save_settings 会写回）
         self._save_settings()
         self.display_message(
             "系统",
