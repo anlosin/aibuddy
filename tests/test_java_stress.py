@@ -33,7 +33,7 @@ from datetime import datetime
 
 # ── 复用项目配置 ──
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from qwen_app.config import load_config, make_openai_client
+from qwen_app.config import get_current_model, make_openai_client
 
 try:
     from openai import OpenAI
@@ -1510,16 +1510,25 @@ def format_duration(seconds):
 class StressTester:
     def __init__(self, max_rounds=None, no_context=False, api_timeout=120,
                  delay=30, max_retries=3, answer_mode=("full", 0), lang="java"):
-        cfg = load_config()
-        self.model_id = cfg.get("model_id", "")
-        self.api_key = cfg.get("api_key", "")
-        self.base_url = cfg.get("base_url", "")
-        self.proxy = cfg.get("proxy", "")
-        self.enable_thinking = cfg.get("enable_thinking", False)
+        # 跟随多模型注册表中的「当前激活模型」(current_model)，
+        # 与桌面应用保持一致的来源；旧版扁平配置会被自动迁移为默认模型。
+        model = get_current_model()
+        if not model:
+            print("[FATAL] model_config.json 中未配置任何模型（请先在应用内添加并选择模型）")
+            sys.exit(1)
+        self.model_id = model.get("model_id", "")
+        self.api_key = model.get("api_key", "")
+        self.base_url = model.get("base_url", "")
+        self.proxy = model.get("proxy", "")
+        self.enable_thinking = model.get("enable_thinking", False)
+        self.model_name = model.get("name", "")
 
         if not self.api_key or not self.base_url:
-            print("[FATAL] model_config.json 中缺少 api_key 或 base_url")
+            print("[FATAL] 当前模型缺少 api_key 或 base_url")
             sys.exit(1)
+
+        print(f"[INFO] 跟随当前模型: {self.model_name or self.model_id} "
+              f"(model_id={self.model_id}, base_url={self.base_url})")
 
         # 语言配置
         lang_lower = lang.lower()
