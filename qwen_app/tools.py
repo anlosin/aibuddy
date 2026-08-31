@@ -21,8 +21,8 @@ DEFAULT_CONFIG = {
     "model_id": "DeepSeek-R1-Distill-Qwen-32B",
     "api_key": "",   # ⚠️ 请通过 model_config.json 配置真实 API Key
     "base_url": "",   # ⚠️ 请通过 model_config.json 配置 API 地址
-    "enable_thinking": True,
-    "enable_tools": False,
+    "enable_thinking": False,
+    "enable_tools": True,
     "enabled_plugins": _scan_plugins(),
     "workspace_root": "",
     "agent_mode": False,

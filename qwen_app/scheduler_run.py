@@ -53,7 +53,7 @@ def build_scheduler():
         model_id=cur.get("model_id", ""),
         plugins=plugins,
         enabled_plugins=enabled,
-        enable_thinking=cur.get("enable_thinking", True),
+        enable_thinking=cur.get("enable_thinking", False),
         enable_tools=cur.get("enable_tools", True),
         max_rounds=config.load_config().get("max_agent_rounds", 12),
     )

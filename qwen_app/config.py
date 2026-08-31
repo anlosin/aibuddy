@@ -102,8 +102,8 @@ def _migrate_models(cfg):
         "api_key": cfg.get("api_key", ""),
         "model_id": cfg.get("model_id", ""),
         "proxy": cfg.get("proxy", ""),
-        "enable_thinking": cfg.get("enable_thinking", True),
-        "enable_tools": cfg.get("enable_tools", False),
+        "enable_thinking": cfg.get("enable_thinking", False),
+        "enable_tools": cfg.get("enable_tools", True),
     }
     cfg["models"] = [default_model]
     cfg["current_model"] = default_model["id"]

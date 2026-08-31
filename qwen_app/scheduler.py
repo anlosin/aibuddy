@@ -328,7 +328,7 @@ def get_active_scheduler():
 class Scheduler:
     def __init__(self, parent=None, plugins=None, enabled_plugins=None,
                  max_rounds=12, client=None, model_id=None,
-                 enable_thinking=False, enable_tools=False, **ignored):
+                 enable_thinking=False, enable_tools=True, **ignored):
         global _ACTIVE_SCHEDULER
         _ACTIVE_SCHEDULER = self
         # parent 是 ChatWindow 实例，运行时实时读取对话主模型的 client/model_id 等

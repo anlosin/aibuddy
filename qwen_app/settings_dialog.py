@@ -128,9 +128,9 @@ def _model_edit_form(window, dlg, model=None):
     le_proxy = QLineEdit(m.get("proxy", ""))
     le_proxy.setPlaceholderText("http://127.0.0.1:7890（留空=直连）")
     chk_think = QCheckBox("启用思考模式 (enable_thinking)")
-    chk_think.setChecked(bool(m.get("enable_thinking", True)))
+    chk_think.setChecked(bool(m.get("enable_thinking", False)))
     chk_tools = QCheckBox("启用工具调用 (enable_tools)")
-    chk_tools.setChecked(bool(m.get("enable_tools", False)))
+    chk_tools.setChecked(bool(m.get("enable_tools", True)))
 
     fl.addRow("名称:", le_name)
     fl.addRow("Base URL:", le_url)
@@ -343,8 +343,8 @@ def _apply_to_window(window, model):
     window.api_key = model.get("api_key", "")
     window.model_id = model.get("model_id", "")
     window.proxy = model.get("proxy", "")
-    window.enable_thinking = bool(model.get("enable_thinking", True))
-    window.enable_tools = bool(model.get("enable_tools", False))
+    window.enable_thinking = bool(model.get("enable_thinking", False))
+    window.enable_tools = bool(model.get("enable_tools", True))
     window.setup_client()
     window._save_settings()
 
