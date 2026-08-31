@@ -315,10 +315,22 @@ def dispatch_tool(plugins, enabled_names, tool_name, arguments):
 #  Scheduler — 调度核心（纯 Python，无 Qt 依赖）
 # ═════════════════════════════════════════
 
+# 模块级单例：供 automation 插件在对话中通过工具调用增删任务时，
+# 拿到当前 Scheduler 实例（插件 execute 拿不到 ChatWindow，靠它桥接）。
+_ACTIVE_SCHEDULER = None
+
+
+def get_active_scheduler():
+    """返回当前活跃的 Scheduler 单例；未初始化时返回 None"""
+    return _ACTIVE_SCHEDULER
+
+
 class Scheduler:
     def __init__(self, parent=None, plugins=None, enabled_plugins=None,
                  max_rounds=12, client=None, model_id=None,
                  enable_thinking=False, enable_tools=False, **ignored):
+        global _ACTIVE_SCHEDULER
+        _ACTIVE_SCHEDULER = self
         # parent 是 ChatWindow 实例，运行时实时读取对话主模型的 client/model_id 等
         self._parent = parent
         # 无 parent 时（独立模式）直接存这些值
