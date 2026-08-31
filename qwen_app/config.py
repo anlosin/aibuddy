@@ -66,6 +66,86 @@ def save_config(cfg):
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
+# ── 多模型注册表 ──
+# data/model_config.json 结构：
+#   models: [ {id, name, base_url, api_key, model_id, proxy,
+#              enable_thinking, enable_tools}, ... ]
+#   current_model: 当前激活模型的 id
+# 旧版扁平字段（model_id/api_key/base_url/proxy/enable_thinking/enable_tools）
+# 保留兼容：首次加载若无 models，自动迁移为一条模型记录并写回。
+
+_MODEL_FIELDS = ("base_url", "api_key", "model_id", "proxy",
+                 "enable_thinking", "enable_tools")
+
+
+def _migrate_models(cfg):
+    """旧扁平配置 → models 注册表迁移（无损：原字段保留）。
+
+    若 cfg 已含非空 models 列表则原样返回；否则把扁平字段打包成一条
+    「默认」模型（字段缺失时给安全默认值），并设为 current_model。
+    """
+    models = cfg.get("models")
+    if isinstance(models, list) and models:
+        # 补齐可能缺失的 id
+        for m in models:
+            if isinstance(m, dict) and not m.get("id"):
+                m["id"] = _new_model_id()
+        if not cfg.get("current_model"):
+            cfg["current_model"] = models[0].get("id")
+        return cfg
+
+    # 从扁平字段构造一条默认模型
+    default_model = {
+        "id": _new_model_id(),
+        "name": "默认模型",
+        "base_url": cfg.get("base_url", ""),
+        "api_key": cfg.get("api_key", ""),
+        "model_id": cfg.get("model_id", ""),
+        "proxy": cfg.get("proxy", ""),
+        "enable_thinking": cfg.get("enable_thinking", True),
+        "enable_tools": cfg.get("enable_tools", False),
+    }
+    cfg["models"] = [default_model]
+    cfg["current_model"] = default_model["id"]
+    return cfg
+
+
+def _new_model_id():
+    import time
+    return "m_%d" % int(time.time() * 1000)
+
+
+def load_models():
+    """加载模型注册表，返回 (models: list, current_id: str)
+
+    自动完成旧配置迁移；空 key 的模型也会保留（用户可能还没填）。
+    """
+    cfg = _migrate_models(load_config())
+    models = cfg.get("models", [])
+    current_id = cfg.get("current_model") or (models[0]["id"] if models else None)
+    # current_model 指向的模型不存在时回退到第一个
+    if current_id and not any(m.get("id") == current_id for m in models):
+        current_id = models[0]["id"] if models else None
+    return models, current_id
+
+
+def save_models(models, current_id):
+    """保存模型注册表（保留配置中其他字段不动）"""
+    cfg = load_config()
+    cfg["models"] = models
+    cfg["current_model"] = current_id
+    save_config(cfg)
+
+
+def get_current_model():
+    """获取当前激活模型的完整字典（含 id/name），找不到返回 None"""
+    models, current_id = load_models()
+    for m in models:
+        if m.get("id") == current_id:
+            return m
+    return models[0] if models else None
+
+
 def make_openai_client(api_key, base_url, proxy=""):
     """构建 OpenAI 兼容客户端。
 
