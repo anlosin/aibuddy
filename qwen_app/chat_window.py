@@ -296,7 +296,10 @@ class ChatWindow(QMainWindow):
         model_menu.addAction("模型管理...", lambda: show_model_manager(self))
 
     def _save_settings(self):
-        save_config({
+        # 读改写：保留配置中的 models 注册表 / current_model / enabled_plugins
+        # 等非本方法管辖的字段，只更新激活模型字段与全局设置。
+        cfg = load_config()
+        cfg.update({
             "model_id": self.model_id,
             "api_key": self.api_key,
             "base_url": self.base_url,
@@ -308,6 +311,7 @@ class ChatWindow(QMainWindow):
             "proxy": self.proxy,
             "ui_theme": self.theme,
         })
+        save_config(cfg)
 
     def _pick_workspace(self, line_edit):
         """打开目录选择对话框，设置工作区根目录"""

@@ -112,7 +112,9 @@ def _migrate_models(cfg):
 
 def _new_model_id():
     import time
-    return "m_%d" % int(time.time() * 1000)
+    import random
+    # 时间戳保证趋势唯一，随机后缀防同一毫秒内撞 id
+    return "m_%d_%04x" % (int(time.time() * 1000), random.getrandbits(16))
 
 
 def load_models():

@@ -9,7 +9,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QDialog, QFormLayout, QLineEdit, QCheckBox,
                              QSpinBox, QComboBox, QDialogButtonBox, QVBoxLayout,
                              QHBoxLayout, QListWidget, QListWidgetItem, QLabel,
-                             QPushButton, QMessageBox)
+                             QPushButton, QMessageBox, QWidget, QApplication)
 
 from .plugin_manager import discover_plugins, get_plugin_meta, compare_versions
 from .config import save_plugin_state, load_models, save_models, _new_model_id
@@ -137,7 +137,7 @@ def _model_edit_form(window, dlg, model=None):
     返回 (form_widget, get_values_fn)；get_values() 校验并返回字段字典，
     校验失败弹提示并返回 None。
     """
-    from PyQt5.QtWidgets import QFormLayout, QLineEdit, QCheckBox
+    from PyQt5.QtWidgets import QFormLayout, QLineEdit, QCheckBox, QWidget
 
     form = QWidget(dlg)
     fl = QFormLayout(form)
