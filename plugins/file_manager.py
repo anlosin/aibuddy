@@ -36,13 +36,15 @@ PROTECTED_DIRS = {".venv", ".git", "node_modules", "__pycache__"}
 
 
 def _root():
-    """工作区根目录：优先用配置里的 workspace_root，否则回退项目根目录"""
+    """工作区根目录：优先使用当前 active workspace（来自对话/任务），
+    否则回退到全局默认目录（项目根/.workbuddy/workspaces/）。
+
+    active workspace 由 chat_window / scheduler 在执行前调用
+    qwen_app.workspace.set_active_workspace() 设置，线程级单例。
+    """
     try:
-        from qwen_app.config import load_config
-        cfg = load_config()
-        root = cfg.get("workspace_root")
-        if root and os.path.isdir(root):
-            return os.path.abspath(root)
+        from qwen_app.workspace import resolve_workspace
+        return resolve_workspace()
     except Exception:
         pass
     return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))

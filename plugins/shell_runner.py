@@ -72,13 +72,14 @@ OUTPUT_LIMIT = 6000  # 输出截断上限（字符）
 
 
 def _workspace_root():
-    """读取配置的 workspace 根目录，缺省为项目目录"""
+    """读取当前 active workspace（来自对话/任务），缺省回退到全局默认目录。
+
+    active workspace 由 chat_window / scheduler 在执行前调用
+    qwen_app.workspace.set_active_workspace() 设置。
+    """
     try:
-        from qwen_app.config import load_config
-        cfg = load_config()
-        root = cfg.get("workspace_root")
-        if root and os.path.isdir(root):
-            return os.path.abspath(root)
+        from qwen_app.workspace import resolve_workspace
+        return resolve_workspace()
     except Exception:
         pass
     return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))

@@ -24,7 +24,8 @@ class WorkerThread(QThread):
     API_TIMEOUT = 60  # API 请求超时秒数
 
     def __init__(self, client, model_id, enable_thinking, enable_tools, messages,
-                 plugins=None, enabled_plugins=None, parent=None, max_rounds=5):
+                 plugins=None, enabled_plugins=None, parent=None, max_rounds=5,
+                 workspace=None):
         super().__init__(parent)
         self.client = client
         self.model_id = model_id
@@ -35,6 +36,7 @@ class WorkerThread(QThread):
         self.enabled_plugins = enabled_plugins or []
         self.max_rounds = max_rounds   # 工具调用循环最大轮次（自主模式可调大）
         self._stop_event = threading.Event()  # 线程安全停止信号
+        self.workspace = workspace  # 当前对话的工作目录；run() 内 set_active + finally clear
 
     def _find_first_tag(self, text, tags):
         best_pos = -1
@@ -49,6 +51,16 @@ class WorkerThread(QThread):
     def run(self):
         completion = None
         try:
+            # 设置当前对话的工作目录作为插件调用上下文；
+            # finally 里 clear_active_workspace 避免线程间状态泄漏
+            # （多 worker 并发、跨对话切换时不读到对方的 workspace）
+            if self.workspace:
+                try:
+                    from .workspace import set_active_workspace
+                    set_active_workspace(self.workspace)
+                except Exception:
+                    pass
+
             messages = list(self.messages)
             extra = {}
             if self.enable_thinking:
@@ -102,6 +114,11 @@ class WorkerThread(QThread):
         except Exception as e:
             self.error_occurred.emit(str(e))
         finally:
+            try:
+                from .workspace import clear_active_workspace
+                clear_active_workspace()
+            except Exception:
+                pass
             self._safe_close(completion)
 
     def _handle_stream(self, completion):

@@ -401,23 +401,36 @@ class Scheduler:
         # 按任务配置解析执行模型（未指定则跟随主模型）
         client, model_id, model_label, m_err = resolve_automation_client(
             auto, self.client, self.model_id)
-        started = datetime.now()
-        final, tool_logs, error = run_automation(
-            auto, client, model_id, self.plugins,
-            self.enabled_plugins, self.enable_thinking, self.enable_tools,
-            auto.get("max_rounds", self.max_rounds))
-        if m_err:
-            error = (m_err + ("；" + error if error else "")) if error else m_err
-        finished = datetime.now()
-        status = "error" if error else "ok"
-        self._record(auto, started, finished, status, final, tool_logs, error,
-                     model_label)
-        return final, error
+        # 设置当前任务的工作目录作为插件调用上下文
+        from .workspace import (cron_workspace_path, set_active_workspace,
+                                clear_active_workspace)
+        set_active_workspace(cron_workspace_path(auto_id,
+                                                 created_at=auto.get("created_at")))
+        try:
+            started = datetime.now()
+            final, tool_logs, error = run_automation(
+                auto, client, model_id, self.plugins,
+                self.enabled_plugins, self.enable_thinking, self.enable_tools,
+                auto.get("max_rounds", self.max_rounds))
+            if m_err:
+                error = (m_err + ("；" + error if error else "")) if error else m_err
+            finished = datetime.now()
+            status = "error" if error else "ok"
+            self._record(auto, started, finished, status, final, tool_logs, error,
+                         model_label)
+            return final, error
+        finally:
+            clear_active_workspace()
 
     def _run_one(self, auto):
         aid = auto.get("id")
         with self._lock:
             self._running.add(aid)
+        # 设置当前任务的工作目录作为插件调用上下文（线程局部，跨任务不互相干扰）
+        from .workspace import (cron_workspace_path, set_active_workspace,
+                                clear_active_workspace)
+        ws_path = cron_workspace_path(aid, created_at=auto.get("created_at"))
+        set_active_workspace(ws_path)
         try:
             started = datetime.now()
             # 按任务配置解析执行模型（未指定则跟随主模型）
@@ -445,6 +458,7 @@ class Scheduler:
         finally:
             with self._lock:
                 self._running.discard(aid)
+            clear_active_workspace()
 
     def _record(self, auto, started, finished, status, final, tool_logs, error,
                 model_label=""):

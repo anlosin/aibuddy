@@ -16,8 +16,9 @@ from .config import save_plugin_state, load_models, save_models, _new_model_id
 
 
 def show_settings(window):
-    """偏好设置：思考模式、工具调用、工作区、自主模式、主题。
+    """偏好设置：思考模式、工具调用、自主模式、主题。
     模型相关设置（Base URL / API Key / 模型 ID / 代理）请通过「菜单→模型」管理。
+    工作目录已按对话/任务自动隔离（每个 talk_*/cron_* 独立目录），无需手动配置。
     """
     dlg = QDialog(window)
     dlg.setWindowTitle("偏好设置")
@@ -25,7 +26,8 @@ def show_settings(window):
     layout = QFormLayout(dlg)
 
     # 顶部提示：引导模型设置走「菜单→模型」
-    hint = QLabel("模型连接（URL / Key / 模型 ID / 代理）请通过「菜单→模型」管理。")
+    hint = QLabel("模型连接（URL / Key / 模型 ID / 代理）请通过「菜单→模型」管理。\n"
+                  "工作目录已自动按对话/定时任务隔离（talk_*/cron_*），无需手动设置。")
     hint.setStyleSheet("color:#8A8F99;")
     hint.setWordWrap(True)
     layout.addRow(hint)
@@ -35,16 +37,6 @@ def show_settings(window):
     chk_tools = QCheckBox("启用工具调用 (计算器、时间查询等)")
     chk_tools.setChecked(window.enable_tools)
     chk_tools.setToolTip("需要模型支持 function calling / tool use 功能。\n如模型不支持，请关闭此选项。")
-
-    # ── 工作区根目录 ──
-    ws_layout = QHBoxLayout()
-    le_ws = QLineEdit(window.workspace_root or "")
-    le_ws.setPlaceholderText("留空=程序所在目录")
-    btn_ws = QPushButton("选择...")
-    btn_ws.clicked.connect(
-        lambda: window._pick_workspace(le_ws))
-    ws_layout.addWidget(le_ws)
-    ws_layout.addWidget(btn_ws)
 
     # ── 自主 / Agent 模式 ──
     chk_agent = QCheckBox("自主模式 (提高工具循环轮次，支持多步任务编排)")
@@ -58,7 +50,6 @@ def show_settings(window):
 
     layout.addRow("", chk_think)
     layout.addRow("", chk_tools)
-    layout.addRow("工作区根目录:", ws_layout)
     layout.addRow("", chk_agent)
     layout.addRow("自主模式轮次:", sp_rounds)
 
@@ -76,18 +67,14 @@ def show_settings(window):
     if dlg.exec_() != QDialog.Accepted:
         return
 
-    new_ws = le_ws.text().strip()
     new_agent = chk_agent.isChecked()
     new_rounds = sp_rounds.value()
     new_theme = "light" if le_theme.currentText() == "浅色" else "dark"
 
-    think_changed = chk_think.isChecked() != window.enable_thinking
-    tools_changed = chk_tools.isChecked() != window.enable_tools
     theme_changed = new_theme != window.theme
 
     window.enable_thinking = chk_think.isChecked()
     window.enable_tools = chk_tools.isChecked()
-    window.workspace_root = new_ws
     window.agent_mode = new_agent
     window.max_agent_rounds = new_rounds
     window.theme = new_theme

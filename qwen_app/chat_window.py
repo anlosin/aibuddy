@@ -299,7 +299,9 @@ class ChatWindow(QMainWindow):
 
     def _save_settings(self):
         # 读改写：保留配置中的 models 注册表 / current_model / enabled_plugins
-        # 等非本方法管辖的字段，只更新激活模型字段与全局设置。
+        # 等非本方法管辖的字段，只更新激活模型字段与全局偏好设置。
+        # workspace_root 已废弃（工作目录按对话/任务自动隔离），不再写盘；
+        # 老配置里如果残留该字段，由 .workspace.resolve_base() 兼容读取作为父目录。
         cfg = load_config()
         cfg.update({
             "model_id": self.model_id,
@@ -307,7 +309,6 @@ class ChatWindow(QMainWindow):
             "base_url": self.base_url,
             "enable_thinking": self.enable_thinking,
             "enable_tools": self.enable_tools,
-            "workspace_root": self.workspace_root,
             "agent_mode": self.agent_mode,
             "max_agent_rounds": self.max_agent_rounds,
             "proxy": self.proxy,
@@ -604,12 +605,20 @@ class ChatWindow(QMainWindow):
         self.stop_button.show()
         self.input_field.setEnabled(False)
 
+        # 计算当前对话的工作目录（talk_<id>_<ts>），传给 WorkerThread，
+        # 由 worker.run() 在自己的线程里 set_active_workspace()，
+        # 在 finally 里 clear，避免多 worker 并发时互相误清。
+        from .workspace import conv_workspace_path
+        ws_path = conv_workspace_path(self.current_conv_id or "default",
+                                      created_at=None)
+
         self.worker_thread = WorkerThread(self.client, self.model_id,
                                           use_thinking, use_tools,
                                           messages,
                                           plugins=self.plugins,
                                           enabled_plugins=ep,
-                                          max_rounds=rounds)
+                                          max_rounds=rounds,
+                                          workspace=ws_path)
         self.worker_thread.chunk_received.connect(self.handle_chunk)
         self.worker_thread.response_complete.connect(self.handle_response_complete)
         self.worker_thread.error_occurred.connect(self.handle_error)

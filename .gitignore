@@ -21,6 +21,9 @@ ssh_connections.json
 # ===== 运行时数据（统一收纳于 data/，不含源码，避免泄露对话/任务/历史） =====
 data/
 
+# ===== 按对话/任务隔离的工作目录（talk_*/cron_*） =====
+.workbuddy/
+
 # ===== 数据库文件 =====
 *.db
 *.sqlite

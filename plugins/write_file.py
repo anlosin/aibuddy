@@ -110,13 +110,8 @@ def _safe_path(filepath):
     """
     root = os.path.dirname(os.path.abspath(__file__))
     try:
-        from qwen_app.config import load_config
-        cfg = load_config()
-        ws = cfg.get("workspace_root")
-        if ws and os.path.isdir(ws):
-            root = ws
-        else:
-            root = os.path.abspath(os.path.join(root, ".."))
+        from qwen_app.workspace import resolve_workspace
+        root = resolve_workspace()
     except Exception:
         root = os.path.abspath(os.path.join(root, ".."))
     root = os.path.abspath(root)
@@ -250,8 +245,13 @@ def _read(args):
 
 def _list(args):
     pattern = args.get("pattern", "")
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    parent = os.path.abspath(os.path.join(base_dir, ".."))
+    # 优先使用当前 active workspace（来自对话/任务），回退默认共享目录
+    try:
+        from qwen_app.workspace import resolve_workspace
+        parent = resolve_workspace()
+    except Exception:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        parent = os.path.abspath(os.path.join(base_dir, ".."))
 
     try:
         files = os.listdir(parent)

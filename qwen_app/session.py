@@ -261,13 +261,43 @@ def select_conv_by_id(window, conv_id):
     refresh_conv_list(window)
 
 
-def _open_storage_location():
-    """打开会话数据所在文件夹。"""
+def _open_storage_location(window, conv_id=None):
+    """打开「当前会话」的独立工作目录（talk_<id>_<ts>/）。
+    若该会话的工作目录尚未创建（首次使用），则惰性创建再打开。
+    找不到会话时回退到 conversations 数据库目录。
+    """
+    from .workspace import conv_workspace_path
+    target = None
+    if conv_id is not None:
+        # 在 window.conversations 里反查 created_at
+        for conv in getattr(window, "conversations", []) or []:
+            if conv.get("id") == conv_id:
+                target = conv_workspace_path(conv_id,
+                                             created_at=conv.get("created_at"))
+                break
+    if not target:
+        # 回退：当前会话或默认
+        cur = getattr(window, "current_conv_id", None)
+        if cur:
+            for conv in getattr(window, "conversations", []) or []:
+                if conv.get("id") == cur:
+                    target = conv_workspace_path(cur,
+                                                 created_at=conv.get("created_at"))
+                    break
+    if not target:
+        target = CONVERSATIONS_DIR  # 兜底：老行为
+
+    # 惰性创建（首次打开前先建好）
+    try:
+        os.makedirs(target, exist_ok=True)
+    except Exception:
+        pass
+
     if os.name == "nt":
-        os.startfile(CONVERSATIONS_DIR)
+        os.startfile(target)
     else:
         import subprocess
-        subprocess.call(["xdg-open", CONVERSATIONS_DIR])
+        subprocess.call(["xdg-open", target])
 
 
 def _export_conversation(window, conv_id):
@@ -342,7 +372,7 @@ def show_conv_menu(window, conv_id, title, button):
     elif chosen == act_delete:
         delete_conversation(window, conv_id)
     elif chosen == act_open:
-        _open_storage_location()
+        _open_storage_location(window, conv_id)
     elif chosen == act_save:
         _export_conversation(window, conv_id)
     elif chosen == act_share:
