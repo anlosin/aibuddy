@@ -345,7 +345,21 @@ class Scheduler:
         self._running = set()
         self._lock = threading.Lock()
         self.on_log = None  # 可选回调(name, status)，GUI 用来刷新状态栏
+        # run_now 完成回调列表：每个回调签名 (aid, final, error)
+        # GUI 在创建对话框时注册；run_now 与 check_due 共用 _run_one 唯一入口
+        self._finished_callbacks = []
         os.makedirs(LOG_DIR, exist_ok=True)
+
+    def on_finished(self, callback):
+        """注册 run_now / check_due 完成回调：callback(aid, final, error)。"""
+        self._finished_callbacks.append(callback)
+
+    def off_finished(self, callback):
+        """注销完成回调（对话框关闭时调用，防止内存泄漏）。"""
+        try:
+            self._finished_callbacks.remove(callback)
+        except ValueError:
+            pass
 
     @property
     def client(self):
@@ -390,75 +404,82 @@ class Scheduler:
             t.start()
 
     def run_now(self, auto_id):
-        """立即执行指定任务（忽略周期），用于「立即运行」按钮"""
+        """异步立即执行指定任务（与 check_due 走同一路径，结果通过 on_finished 回调回传）。
+
+        返回：
+            True  — 任务已加入执行队列
+            False — 任务不存在或正在执行中（GUI 应给出对应提示）
+        抛出：
+            不会抛异常（参数错误已收敛到返回值）
+        """
         with self._lock:
             auto = next((a for a in self.automations if a.get("id") == auto_id), None)
-        if not auto:
-            return None, "未找到任务"
-        with self._lock:
-            if auto.get("id") in self._running:
-                return None, "该任务正在执行中"
-        # 按任务配置解析执行模型（未指定则跟随主模型）
-        client, model_id, model_label, m_err = resolve_automation_client(
-            auto, self.client, self.model_id)
-        # 设置当前任务的工作目录作为插件调用上下文
-        from .workspace import (cron_workspace_path, set_active_workspace,
-                                clear_active_workspace)
-        set_active_workspace(cron_workspace_path(auto_id,
-                                                 created_at=auto.get("created_at")))
-        try:
-            started = datetime.now()
-            final, tool_logs, error = run_automation(
-                auto, client, model_id, self.plugins,
-                self.enabled_plugins, self.enable_thinking, self.enable_tools,
-                auto.get("max_rounds", self.max_rounds))
-            if m_err:
-                error = (m_err + ("；" + error if error else "")) if error else m_err
-            finished = datetime.now()
-            status = "error" if error else "ok"
-            self._record(auto, started, finished, status, final, tool_logs, error,
-                         model_label)
-            return final, error
-        finally:
-            clear_active_workspace()
+            if not auto:
+                return False
+            aid = auto.get("id")
+            if aid in self._running:
+                return False  # 防并发：与 check_due 共用 _running 集合
+        threading.Thread(target=self._run_one, args=(auto,), daemon=True).start()
+        return True
 
     def _run_one(self, auto):
+        """后台线程入口：被 check_due 与 run_now 共用。负责：
+        - 登记 _running 防并发
+        - 设置/清理 active workspace（线程局部）
+        - 调用 _execute 执行实际任务
+        - 触发 on_log + on_finished 回调
+        """
         aid = auto.get("id")
         with self._lock:
             self._running.add(aid)
-        # 设置当前任务的工作目录作为插件调用上下文（线程局部，跨任务不互相干扰）
         from .workspace import (cron_workspace_path, set_active_workspace,
                                 clear_active_workspace)
         ws_path = cron_workspace_path(aid, created_at=auto.get("created_at"))
         set_active_workspace(ws_path)
+        final, error = None, None
         try:
-            started = datetime.now()
-            # 按任务配置解析执行模型（未指定则跟随主模型）
-            client, model_id, model_label, m_err = resolve_automation_client(
-                auto, self.client, self.model_id)
-            final, tool_logs, error = run_automation(
-                auto, client, model_id, self.plugins,
-                self.enabled_plugins, self.enable_thinking, self.enable_tools,
-                auto.get("max_rounds", self.max_rounds))
-            if m_err:
-                error = (m_err + ("；" + error if error else "")) if error else m_err
-            finished = datetime.now()
-            status = "error" if error else "ok"
-            self._record(auto, started, finished, status, final, tool_logs, error,
-                         model_label)
-            if self.on_log:
-                try:
-                    self.on_log(auto.get("name", aid), status)
-                except Exception:
-                    pass
+            final, error = self._execute(auto)
         except Exception as e:
             auto["last_status"] = "error"
             auto["last_error"] = str(e)
             self._save()
+            error = str(e)
         finally:
             with self._lock:
                 self._running.discard(aid)
             clear_active_workspace()
+            # 通知所有已注册的完成回调（GUI 拿结果）
+            for cb in list(self._finished_callbacks):
+                try:
+                    cb(aid, final, error)
+                except Exception:
+                    pass
+
+    def _execute(self, auto):
+        """任务执行体（无并发控制、无工作目录管理），被 _run_one 唯一调用。
+
+        返回 (final: str, error: Optional[str])
+        """
+        aid = auto.get("id")
+        client, model_id, model_label, m_err = resolve_automation_client(
+            auto, self.client, self.model_id)
+        started = datetime.now()
+        final, tool_logs, error = run_automation(
+            auto, client, model_id, self.plugins,
+            self.enabled_plugins, self.enable_thinking, self.enable_tools,
+            auto.get("max_rounds", self.max_rounds))
+        if m_err:
+            error = (m_err + ("；" + error if error else "")) if error else m_err
+        finished = datetime.now()
+        status = "error" if error else "ok"
+        self._record(auto, started, finished, status, final, tool_logs, error,
+                     model_label)
+        if self.on_log:
+            try:
+                self.on_log(auto.get("name", aid), status)
+            except Exception:
+                pass
+        return final, error
 
     def _record(self, auto, started, finished, status, final, tool_logs, error,
                 model_label=""):

@@ -13,7 +13,7 @@
 import threading
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTime, QRegExp
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QTime, QRegExp, QTimer
 from PyQt5.QtGui import QColor, QTextCharFormat, QFont, QSyntaxHighlighter
 from PyQt5.QtWidgets import (QDialog, QWidget, QTableWidget, QTableWidgetItem,
                              QListWidget, QListWidgetItem, QPushButton, QLabel, QMessageBox,
@@ -74,13 +74,25 @@ class AutomationManagerDialog(QDialog):
     表格化展示，每行可内联切换启用状态；状态用彩色徽标；支持按状态/名称筛选。
     """
 
-    # 跨线程安全回调：worker 线程执行完后用信号把结果发回 GUI 线程
-    _run_done = pyqtSignal(str, str)  # (final, error)
+    # 跨线程安全回调：scheduler 完成后（来自后台 worker）把结果发回 GUI 线程
+    _run_done = pyqtSignal(str, str, str)  # (aid, final, error)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
         self._run_done.connect(self._on_done)
+        # 当前正在等待结果的 aid（用于忽略非预期的回调，例如别的渠道触发）
+        self._run_pending_aid = None
+        # 看门狗：无论 run_now 出什么岔子，硬性恢复按钮（默认 5 分钟）
+        self._run_watchdog = QTimer(self)
+        self._run_watchdog.setSingleShot(True)
+        self._run_watchdog.timeout.connect(self._on_watchdog_timeout)
+        # 订阅 scheduler 完成回调（_run_one 完成时触发）
+        if parent is not None and hasattr(parent, "scheduler"):
+            self._scheduler_callback = self._dispatch_run_done
+            parent.scheduler.on_finished(self._scheduler_callback)
+        else:
+            self._scheduler_callback = None
         self.setWindowTitle("自动化任务管理")
         self.resize(880, 540)
         layout = QVBoxLayout(self)
@@ -349,17 +361,31 @@ class AutomationManagerDialog(QDialog):
         aid = self._selected_id()
         if not aid:
             return
+        # 启动异步执行（run_now 返回 False 表示任务已在跑 / 不存在）
+        started = self.parent_window.scheduler.run_now(aid)
+        if not started:
+            QMessageBox.information(self, "提示", "该任务正在执行中或已不存在")
+            return
         self.status.setText("执行中…")
         self.btn_run.setEnabled(False)
+        self._run_pending_aid = aid
+        # 看门狗：无论何种原因（异常 / 卡死 / 调度器 bug）超过 5 分钟自动恢复按钮
+        self._run_watchdog.start(5 * 60 * 1000)
 
-        def _worker():
-            final, err = self.parent_window.scheduler.run_now(aid)
-            # 用信号把结果安全送回 GUI 线程（worker 线程里不能操作 UI）
-            self._run_done.emit(final, err)
+    def _dispatch_run_done(self, aid, final, error):
+        """scheduler 完成回调（任何路径触发的执行都走这里），转发给 GUI 信号。
 
-        threading.Thread(target=_worker, daemon=True).start()
+        只关心本对话框发起的任务：其他渠道触发的回调忽略（避免误恢复按钮）。
+        pyqtSignal emit 跨线程时 Qt 自动用 QueuedConnection 切换到接收者线程，
+        因此从后台线程直接 emit 是安全的。
+        """
+        if self._run_pending_aid is None or aid != self._run_pending_aid:
+            return
+        self._run_done.emit(aid, final or "", error)
 
-    def _on_done(self, final, err):
+    def _on_done(self, aid, final, err):
+        self._run_watchdog.stop()
+        self._run_pending_aid = None
         self.btn_run.setEnabled(True)
         self.refresh()
         if err:
@@ -369,6 +395,25 @@ class AutomationManagerDialog(QDialog):
             self.status.setText("执行完成")
             msg = final[:800] + ("…" if len(final) > 800 else "")
             QMessageBox.information(self, "执行结果", msg)
+
+    def _on_watchdog_timeout(self):
+        """5 分钟内未收到完成回调：硬性恢复按钮 + 提示用户查日志。"""
+        self._run_pending_aid = None
+        self.btn_run.setEnabled(True)
+        self.status.setText("执行超时，请查看任务日志")
+        QMessageBox.warning(self, "执行超时",
+                            "任务超过 5 分钟仍未结束，已恢复按钮。\n"
+                            "请到任务日志中查看实际进度。")
+
+    def closeEvent(self, event):
+        # 关闭对话框时注销 scheduler 回调，避免内存泄漏 + 关闭后回调触发崩溃
+        if self._scheduler_callback is not None and self.parent_window is not None:
+            try:
+                self.parent_window.scheduler.off_finished(self._scheduler_callback)
+            except Exception:
+                pass
+        self._run_watchdog.stop()
+        super().closeEvent(event)
 
     def _view_logs(self):
         aid = self._selected_id()
