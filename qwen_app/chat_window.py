@@ -608,9 +608,12 @@ class ChatWindow(QMainWindow):
         # 计算当前对话的工作目录（talk_<id>_<ts>），传给 WorkerThread，
         # 由 worker.run() 在自己的线程里 set_active_workspace()，
         # 在 finally 里 clear，避免多 worker 并发时互相误清。
+        # created_at 必须取对话元数据里的真实创建时间（与删除会话/打开存储位置
+        # 同源），否则每次发消息都会算出含当前时间戳的新目录 → 孤儿目录。
         from .workspace import conv_workspace_path
+        conv = get_current_conv(self)
         ws_path = conv_workspace_path(self.current_conv_id or "default",
-                                      created_at=None)
+                                      created_at=(conv or {}).get("created_at"))
 
         self.worker_thread = WorkerThread(self.client, self.model_id,
                                           use_thinking, use_tools,
