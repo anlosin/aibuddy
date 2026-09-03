@@ -122,3 +122,31 @@ def resolve_workspace():
 def reset_for_tests():
     """仅用于测试：清空当前线程的 active 上下文"""
     _tls.active_workspace = None
+
+
+# ── 清理 ──
+def _rmtree_silent(path):
+    """递归删除目录；目录不存在/权限不足时静默（不抛异常）。
+
+    删除实体（对话/任务）时同步调用，孤儿目录容错。
+    """
+    import shutil
+    try:
+        if path and os.path.isdir(path):
+            shutil.rmtree(path)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def delete_conv_workspace(conv_id, created_at=None):
+    """删除指定对话的工作目录（talk_<id>_<ts>/）。不存在则静默返回 False。"""
+    p = conv_workspace_path(conv_id, created_at=created_at)
+    return _rmtree_silent(p)
+
+
+def delete_cron_workspace(auto_id, created_at=None):
+    """删除指定定时任务的工作目录（cron_<id>_<ts>/）。不存在则静默返回 False。"""
+    p = cron_workspace_path(auto_id, created_at=created_at)
+    return _rmtree_silent(p)

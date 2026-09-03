@@ -160,7 +160,7 @@ def _build_conv_row(window, conv, pal, max_title_w, sb_w, h_margin, v_margin,
     btn.setFixedSize(btn_w, btn_w)
     transparent_ss = (
         "QLabel#btnConvMenu { background: transparent; color: transparent;"
-        " font-size: 14px; border-radius: 4px; }}"
+        " font-size: 14px; border-radius: 4px; }"
     )
     visible_ss = (
         f"QLabel#btnConvMenu {{ color: {pal['conv_fg']};"
@@ -396,13 +396,15 @@ def rename_conversation(window, conv_id, old_title):
 
 
 def delete_conversation(window, conv_id):
-    """删除会话"""
+    """删除会话（同时清理该会话的独立工作目录 talk_<id>_<ts>/）"""
     reply = QMessageBox.question(
         window, "确认", "确定要删除这个会话吗？\n此操作不可撤销。",
         QMessageBox.Yes | QMessageBox.No, QMessageBox.No
     )
     if reply != QMessageBox.Yes:
         return
+    # 先缓存元数据（从列表里移走之后还查得到，避免再去 SQLite 查）
+    conv_meta = next((c for c in window.conversations if c["id"] == conv_id), None)
     window.conversations = [c for c in window.conversations if c["id"] != conv_id]
     # 如果删的是当前对话，切换到第一个
     if conv_id == window.current_conv_id:
@@ -414,4 +416,11 @@ def delete_conversation(window, conv_id):
     save_convs(window)
     load_current_conv(window)
     refresh_conv_list(window)
+    # 同步删除该会话的独立工作目录（容错：目录不存在/权限问题静默）
+    if conv_meta is not None:
+        try:
+            from .workspace import delete_conv_workspace
+            delete_conv_workspace(conv_id, created_at=conv_meta.get("created_at"))
+        except Exception:
+            pass
     window.display_message("系统", "会话已删除", "system")

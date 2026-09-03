@@ -545,9 +545,18 @@ class Scheduler:
         return True
 
     def delete_automation(self, auto_id):
+        # 先缓存元数据（同步删除独立工作目录 cron_<id>_<ts>/）
         with self._lock:
+            auto_meta = next(
+                (a for a in self.automations if a.get("id") == auto_id), None)
             self.automations = [a for a in self.automations if a.get("id") != auto_id]
         self._save()
+        if auto_meta is not None:
+            try:
+                from .workspace import delete_cron_workspace
+                delete_cron_workspace(auto_id, created_at=auto_meta.get("created_at"))
+            except Exception:
+                pass
 
     def set_enabled(self, auto_id, enabled):
         with self._lock:
