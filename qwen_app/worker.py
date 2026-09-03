@@ -19,8 +19,8 @@ class WorkerThread(QThread):
     tool_call_start = pyqtSignal(str, str)        # (工具名, 参数JSON)
     tool_call_result = pyqtSignal(str, str, str)  # (工具名, 参数, 结果)
 
-    START_TAGS = ["\u8fea\u58eb", "<think>", "<thinking>"]
-    END_TAGS = ["iever", "</think>", "</thinking>"]
+    START_TAGS = ["<think>", "<thinking>"]
+    END_TAGS = ["</think>", "</thinking>"]
     API_TIMEOUT = 60  # API 请求超时秒数
 
     def __init__(self, client, model_id, enable_thinking, enable_tools, messages,
