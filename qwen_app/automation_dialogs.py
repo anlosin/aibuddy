@@ -122,9 +122,9 @@ class AutomationManagerDialog(QDialog):
         layout.addLayout(bar)
 
         # ── 任务表格 ──
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["任务名称", "周期", "模型", "下次执行", "上次状态", "启用"])
+            ["任务名称", "周期", "模型", "下次执行", "上次执行", "上次状态", "启用"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -219,6 +219,20 @@ class AutomationManagerDialog(QDialog):
                 nxt_txt = "（已禁用）"
             self.table.setItem(row, 3, QTableWidgetItem(nxt_txt))
 
+            # 上次执行（绝对时间，方便对照"上次是几分钟/几天前"）
+            last_run = a.get("last_run")
+            if last_run:
+                try:
+                    last_dt = datetime.fromisoformat(last_run)
+                    last_txt = last_dt.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    last_txt = str(last_run)[:16]
+            else:
+                last_txt = "—"
+            last_item = QTableWidgetItem(last_txt)
+            last_item.setToolTip(last_run or "")
+            self.table.setItem(row, 4, last_item)
+
             # 上次状态（彩色徽标）
             status = a.get("last_status")
             enabled = a.get("enabled", True)
@@ -233,23 +247,23 @@ class AutomationManagerDialog(QDialog):
             st_item = QTableWidgetItem(mark)
             st_item.setForeground(color)
             st_item.setFont(QFont("", -1, QFont.Bold))
-            self.table.setItem(row, 4, st_item)
+            self.table.setItem(row, 5, st_item)
 
             # 启用开关（内联复选框）
             chk = QTableWidgetItem()
             chk.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
             chk.setTextAlignment(Qt.AlignCenter)
             chk.setData(Qt.UserRole, aid)
-            self.table.setItem(row, 5, chk)
+            self.table.setItem(row, 6, chk)
 
         self.table.resizeColumnToContents(3)
         self._apply_filter()
         if prev:
             self._select_by_id(prev)
 
-    # ── 启用开关：单击第 6 列切换 ──
+    # ── 启用开关：单击第 7 列切换 ──
     def _on_cell_clicked(self, row, col):
-        if col != 5:
+        if col != 6:
             return
         item = self.table.item(row, col)
         if not item:
@@ -320,6 +334,7 @@ class AutomationManagerDialog(QDialog):
                 enabled=dlg.enabled_chk.isChecked(),
                 max_rounds=dlg.rounds_spin.value(),
                 model_id=dlg.model_combo.currentData() or "",
+                workspace=dlg.workspace_combo.currentData() or "isolated",
             )
             self.refresh()
 
@@ -341,6 +356,7 @@ class AutomationManagerDialog(QDialog):
                 enabled=dlg.enabled_chk.isChecked(),
                 max_rounds=dlg.rounds_spin.value(),
                 model_id=dlg.model_combo.currentData() or "",
+                workspace=dlg.workspace_combo.currentData() or "isolated",
             )
             self.refresh()
 
@@ -465,6 +481,12 @@ class AutomationEditDialog(QDialog):
         layout.addRow("任务名称:", self.name_edit)
         layout.addRow("任务提示词:", self.prompt_edit)
         layout.addRow("执行模型:", self.model_combo)
+        # ── 工作目录模式：默认独立；"共享" 用于跨任务累积数据（金价/硬件价格历史等） ──
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.addItem("独立（每个任务独立目录）", "isolated")
+        self.workspace_combo.addItem("共享（项目根 data/，跨任务累积）", "shared")
+        self.workspace_combo.setCurrentIndex(0)
+        layout.addRow("工作目录:", self.workspace_combo)
         layout.addRow("工具循环轮次:", self.rounds_spin)
         layout.addRow("", self.enabled_chk)
 
@@ -533,6 +555,10 @@ class AutomationEditDialog(QDialog):
         self.prompt_edit.setPlainText(auto.get("prompt", ""))
         self.enabled_chk.setChecked(auto.get("enabled", True))
         self.rounds_spin.setValue(auto.get("max_rounds", 12))
+        # 恢复工作目录模式（默认 isolated，缺失字段时回退）
+        ws_mode = auto.get("workspace", "isolated")
+        ws_idx = self.workspace_combo.findData(ws_mode)
+        self.workspace_combo.setCurrentIndex(ws_idx if ws_idx >= 0 else 0)
         # 恢复任务指定的执行模型（无该字段或为空 = 跟随主模型）
         idx = self.model_combo.findData(auto.get("model_id", ""))
         self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)

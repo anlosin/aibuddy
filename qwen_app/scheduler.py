@@ -432,9 +432,14 @@ class Scheduler:
         aid = auto.get("id")
         with self._lock:
             self._running.add(aid)
-        from .workspace import (cron_workspace_path, set_active_workspace,
-                                clear_active_workspace)
-        ws_path = cron_workspace_path(aid, created_at=auto.get("created_at"))
+        from .workspace import (cron_workspace_path, cron_shared_workspace_path,
+                                set_active_workspace, clear_active_workspace)
+        # workspace 模式：默认 "isolated"（每个任务独立目录）；
+        # 显式 "shared" 时落到项目根的 data/，用于跨任务/跨日期累积数据
+        if auto.get("workspace") == "shared":
+            ws_path = cron_shared_workspace_path()
+        else:
+            ws_path = cron_workspace_path(aid, created_at=auto.get("created_at"))
         set_active_workspace(ws_path)
         final, error = None, None
         try:

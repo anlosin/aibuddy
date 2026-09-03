@@ -69,6 +69,16 @@ def cron_workspace_path(auto_id, created_at=None):
     return os.path.join(resolve_base(), f"{_PREFIX_CRON}{auto_id}_{ts}")
 
 
+def cron_shared_workspace_path():
+    """定时任务共享工作目录：项目根的 data/ 下。
+
+    适用场景：跨任务/跨日期需要累积的数据（如金价日志、硬件价格历史）。
+    与每个任务独立目录的设计互补——本目录由显式标记 "workspace": "shared"
+    的任务使用，普通任务的产物仍在 cron_<id>_<ts>/ 隔离目录。
+    """
+    return os.path.join(_PROJECT_ROOT, "data")
+
+
 def _ts_from_iso(iso):
     """ISO 字符串 -> YYYYMMDD_HHMMSS。解析失败回退当前时间。"""
     try:
