@@ -60,10 +60,45 @@ TOOLS = [
 
 
 def _safe_path(filepath):
-    """解析文件路径"""
+    """解析为安全路径：相对路径归到当前对话工作目录，绝对路径保持不变。
+
+    用 realpath 规范化（解析 ../、符号链接）并强制约束在对话工作目录内，
+    防止路径穿越。与 write_file 插件行为保持一致。
+    """
     if os.path.isabs(filepath):
         return filepath
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", filepath)
+    root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    try:
+        from qwen_app.workspace import resolve_workspace
+        root = resolve_workspace()
+    except Exception:
+        pass
+    root_real = os.path.realpath(root)
+    candidate = os.path.realpath(os.path.join(root, filepath))
+    if candidate != root_real and not candidate.startswith(root_real + os.sep):
+        raise ValueError(f"路径越界，禁止访问对话工作目录之外的位置: {filepath}")
+    return candidate
+
+
+def _resolve_read_path(filepath):
+    """读取用路径解析：相对路径先在当前对话工作目录查找，找不到回退项目根。"""
+    if os.path.isabs(filepath):
+        return filepath
+    ws = None
+    try:
+        from qwen_app.workspace import get_active_workspace
+        ws = get_active_workspace()
+    except Exception:
+        ws = None
+    proj_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    candidates = []
+    if ws:
+        candidates.append(os.path.join(ws, filepath))
+    candidates.append(os.path.join(proj_root, filepath))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return os.path.join(ws if ws else proj_root, filepath)
 
 
 def _format_table(headers, rows):
@@ -149,7 +184,7 @@ def _read(args):
     if not filepath:
         return "错误: 未提供文件路径"
 
-    path = _safe_path(filepath)
+    path = _resolve_read_path(filepath)
     if not os.path.exists(path):
         return f"错误: 文件不存在 - {path}"
 
