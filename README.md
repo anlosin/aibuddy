@@ -81,7 +81,6 @@ python -m qwen_app.scheduler_run --once
   - `expert_router.py` — 专家路由（声明式专家）
   - `compressor.py` / `sanitizer.py` — 对话压缩与输入清洗
   - `experts/` — 专家声明（`*.json`）
-  - `worker_system/` — 线程池 / 异步任务工具
 - `plugins/` — 各功能插件（顶层包，运行时数据经 `..` 指向 `data/`）
 - `scripts/` — 辅助脚本（`push.py` 推送、`migrate_conversations.py` 迁移）
 - `tests/` — 测试与压测脚本（结果产物输出到 `tests/output/`）
