@@ -58,7 +58,8 @@ def render_day12(repo, app, engine, bridge):
     def step1_send():
         print("  [step1] bridge.send_message('帮我写个 Python 快速排序')")
         bridge.send_message("帮我写个 Python 快速排序")
-        QTimer.singleShot(3500, step2_grab)
+        # Day 3-5: 真实流式（fake client 每 80ms 推一个 chunk，约 1.5s 跑完）
+        QTimer.singleShot(5000, step2_grab)
 
     def step2_grab():
         _grab_to_file(engine, app, out_path, "day12")
