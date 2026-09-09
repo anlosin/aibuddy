@@ -13,8 +13,8 @@ def get_palette(theme):
     if theme == "dark":
         return {
             "chat_bg": "#161616",
-            "ai_bubble": "#2A2A2A", "ai_fg": "#E8E8E8",
-            "user_bubble": "#2F7D5B", "user_fg": "#FFFFFF",
+            "ai_bubble": "#1E1E22", "ai_fg": "#E8E8E8", "ai_border": "#2C2C2E",
+            "user_bubble": "#3D6FE0", "user_fg": "#FFFFFF",
             "tool_bg": "#3A3020", "tool_fg": "#E0C089",
             "sys_bg": "#2A2A2A", "sys_fg": "#9A9A9A",
             "err_bg": "#3A1F1F", "err_fg": "#FF9A9A",
@@ -22,23 +22,23 @@ def get_palette(theme):
             "avatar_ai": "#4E6EF2", "avatar_user": "#23B36B",
             "avatar_tool": "#E0913A", "avatar_think": "#7A7FB0",
             "ts_fg": "#777777",
-            "conv_sel": "#34406B", "conv_hover": "#2A2E38", "conv_fg": "#E5E5E5",
+            "conv_sel": "#2A3550", "conv_hover": "#1F2330", "conv_fg": "#E5E5E5",
             "conv_time": "#888888",
         }
     return {
         "chat_bg": "#F5F5F7",
-        "ai_bubble": "#FFFFFF", "ai_fg": "#1F1F1F",
-        "user_bubble": "#95EC69", "user_fg": "#1A1A1A",
+        "ai_bubble": "#FFFFFF", "ai_fg": "#1F1F1F", "ai_border": "#E5E7EB",
+        "user_bubble": "#4F8AF7", "user_fg": "#FFFFFF",
         "tool_bg": "#FFF7E6", "tool_fg": "#9A6B1A",
         "sys_bg": "#EDEFF2", "sys_fg": "#8A8F99",
         "err_bg": "#FDECEC", "err_fg": "#D93025",
         "think_bg": "#F0F1F3", "think_fg": "#8A8F99",
         "avatar_ai": "#4E6EF2", "avatar_user": "#23B36B",
         "avatar_tool": "#E0913A", "avatar_think": "#9AA0C0",
-            "ts_fg": "#B0B4BD",
-            "conv_sel": "#D6E4FF", "conv_hover": "#EEF2FF", "conv_fg": "#333333",
-            "conv_time": "#909399",
-        }
+        "ts_fg": "#B0B4BD",
+        "conv_sel": "#EAF1FF", "conv_hover": "#F4F6FB", "conv_fg": "#333333",
+        "conv_time": "#909399",
+    }
 
 
 def theme_qss(theme):
@@ -55,8 +55,8 @@ def theme_qss(theme):
         QWidget#btnConvMenu { background: transparent; border: none; font-size: 14px; color: #888888; padding: 4px 6px; border-radius: 4px; }
         QWidget#btnConvMenu:hover { background-color: #333333; color: #E5E5E5; }
         QFrame#inputFrame { background-color: #1A1A1A; border-top: 1px solid #2C2C2C; }
-        QLineEdit { border: 1px solid #3A3A3A; border-radius: 18px; padding: 10px 16px; font-size: 13px; background: #262626; min-height: 20px; color: #E5E5E5; }
-        QLineEdit:focus { border-color: #4E6EF2; }
+        QLineEdit { border: 1px solid #3A3A3A; border-radius: 12px; padding: 10px 16px; font-size: 13px; background: #262626; min-height: 20px; color: #E5E5E5; }
+        QLineEdit:focus { border-color: #4E6EF2; background: #2A2A2A; }
         QPushButton#btnSend { background-color: #4E6EF2; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
         QPushButton#btnSend:hover { background-color: #3B5BEF; }
         QPushButton#btnSend:pressed { background-color: #2D4CD9; }
@@ -90,8 +90,8 @@ def theme_qss(theme):
         QWidget#btnConvMenu { background: transparent; border: none; font-size: 14px; color: #999999; padding: 4px 6px; border-radius: 4px; }
         QWidget#btnConvMenu:hover { background-color: #E5E6EB; color: #333333; }
         QFrame#inputFrame { background-color: #F7F8FA; border-top: 1px solid #E5E6EB; }
-        QLineEdit { border: 1px solid #E5E6EB; border-radius: 18px; padding: 10px 16px; font-size: 13px; background: #FFFFFF; min-height: 20px; color: #333333; }
-        QLineEdit:focus { border-color: #4E6EF2; }
+        QLineEdit { border: 1px solid #E5E6EB; border-radius: 12px; padding: 10px 16px; font-size: 13px; background: #FFFFFF; min-height: 20px; color: #333333; }
+        QLineEdit:focus { border-color: #4E6EF2; background: #FAFBFC; }
         QPushButton#btnSend { background-color: #4E6EF2; color: white; border: none; border-radius: 18px; padding: 10px 24px; font-size: 13px; font-weight: bold; }
         QPushButton#btnSend:hover { background-color: #3B5BEF; }
         QPushButton#btnSend:pressed { background-color: #2D4CD9; }
@@ -251,9 +251,10 @@ def build_bubble(theme, sender, text, tag, time_str):
                 f'</table>')
     else:  # 默认：AI 回复（左侧，机器人头像）
         bubble = ('<td width="72%" align="left" style="background:{ab};'
-                  'color:{af};border-radius:16px;padding:9px 13px;'
-                  'font-family:"Microsoft YaHei";font-size:13px;line-height:1.55;">{esc}</td>'
-                  ).format(ab=p["ai_bubble"], af=p["ai_fg"], esc=esc)
+                  'color:{af};border:1px solid {aib};border-radius:16px;'
+                  'padding:9px 13px;font-family:"Microsoft YaHei";'
+                  'font-size:13px;line-height:1.55;">{esc}</td>'
+                  ).format(ab=p["ai_bubble"], af=p["ai_fg"], aib=p["ai_border"], esc=esc)
         av = avatar_td(p["avatar_ai"], "🤖")
         row = f'<tr>{av}{bubble}{spacer}</tr>'
 
