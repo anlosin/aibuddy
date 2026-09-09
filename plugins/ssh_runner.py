@@ -87,9 +87,29 @@ def _load_cfg():
 
 
 def _save_cfg():
+    """持久化连接配置，密码字段另存到系统凭据库（keyring），磁盘 cfg 不含明文。
+
+    密码通过 _secret_store 加密保存到 Windows 凭据管理器 / macOS Keychain /
+    Linux Secret Service，重启后无需重输。keyring 不可用时退到内存缓存。
+    如需修改密码，重新调用 ssh_connect 即可覆盖。
+    """
     try:
+        from . import _secret_store
+        sanitized = {}
+        for name, cfg in _CFG.items():
+            if isinstance(cfg, dict):
+                c = dict(cfg)
+                pw = c.pop("password", None) or ""
+                kp = c.pop("key_passphrase", None) or ""
+                if pw:
+                    _secret_store.set_secret("ssh", name, pw)
+                if kp:
+                    _secret_store.set_secret("ssh", f"{name}#keypass", kp)
+                sanitized[name] = c
+            else:
+                sanitized[name] = cfg
         with open(CONN_FILE, "w", encoding="utf-8") as f:
-            json.dump(_CFG, f, ensure_ascii=False, indent=2)
+            json.dump(sanitized, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -143,11 +163,18 @@ def _connect(cfg):
             "compress": True,
         }
         key_path = cfg.get("key_path")
-        password = cfg.get("password")
+        # 密码解析：先从系统凭据库取（keyring），再回退 cfg 内（兼容旧残留）
+        try:
+            from . import _secret_store
+            password = _secret_store.get_secret("ssh", cfg.get("name") or "default") or cfg.get("password")
+            key_passphrase = _secret_store.get_secret("ssh", f"{cfg.get('name') or 'default'}#keypass") or cfg.get("key_passphrase")
+        except Exception:
+            password = cfg.get("password")
+            key_passphrase = cfg.get("key_passphrase")
         if key_path:
             kwargs["key_filename"] = key_path
-            if cfg.get("key_passphrase"):
-                kwargs["passphrase"] = cfg["key_passphrase"]
+            if key_passphrase:
+                kwargs["passphrase"] = key_passphrase
         elif password:
             kwargs["password"] = password
         else:
@@ -195,8 +222,10 @@ def _do_connect(args):
     _load_cfg()
     _CFG[name] = cfg
     _save_cfg()
-    auth = "私钥(%s)" % cfg["key_path"] if cfg.get("key_path") else "密码" if cfg.get("password") else "无密码/agent"
-    return f"✅ 连接成功并已保存: [{name}] {cfg['user']}@{cfg['host']}:{cfg['port']} (认证方式: {auth})"
+    # 用户本次传入的密码（刚存到 keyring）就是有密码
+    has_pw = bool(cfg.get("password"))
+    auth = "私钥(%s)" % cfg["key_path"] if cfg.get("key_path") else "密码" if has_pw else "无密码/agent"
+    return f"✅ 连接成功并已保存: [{name}] {cfg['user']}@{cfg['host']}:{cfg['port']} (认证方式: {auth})。密码已加密存入系统凭据库，重启后无需重输。"
 
 
 def _do_command(args):
@@ -222,7 +251,11 @@ def _do_command(args):
             run_cmd = "sudo -S -p '' " + run_cmd
         stdin, stdout, stderr = client.exec_command(run_cmd, timeout=timeout)
         if use_sudo:
-            pw = _CFG.get(name, {}).get("password", "")
+            try:
+                from . import _secret_store
+                pw = _secret_store.get_secret("ssh", name) or _CFG.get(name, {}).get("password", "")
+            except Exception:
+                pw = _CFG.get(name, {}).get("password", "")
             if pw:
                 stdin.write(pw + "\n")
                 stdin.flush()
@@ -315,7 +348,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "ssh_connect",
-            "description": "配置并测试到远程主机的 SSH 连接，配置会持久化以便后续复用。支持密码认证或私钥认证（key_path）。",
+            "description": "配置并测试到远程主机的 SSH 连接，连接配置（不含密码与私钥口令）会持久化以便后续复用。支持密码认证或私钥认证（key_path + key_passphrase）。密码与私钥口令加密保存在系统凭据库（Windows 凭据管理器 / macOS Keychain / Linux Secret Service），重启后无需重输；如需修改密码请重新调用本工具传入新密码。",
             "parameters": {
                 "type": "object",
                 "properties": {

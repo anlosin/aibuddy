@@ -114,14 +114,21 @@ def _load_cfg():
 def _save_cfg():
     """持久化连接配置，剔除密码字段，避免明文落盘。
 
-    密码仅保留在内存 _CFG 中供当前会话复用；重启后需重新 db_connect 提供。
+    密码通过 _secret_store 加密保存到系统凭据库（Windows 凭据管理器 /
+    macOS Keychain / Linux Secret Service），重启后无需重输。如需修改
+    密码，重新调用 db_connect 即可覆盖。keyring 不可用时退到内存缓存
+    （仅本次会话有效）。
     """
     try:
+        from . import _secret_store
         sanitized = {}
         for name, cfg in _CFG.items():
             if isinstance(cfg, dict):
                 c = dict(cfg)
-                c.pop("password", None)
+                pw = c.pop("password", None) or ""
+                # 密码另存到系统凭据库（同名覆盖）
+                if pw:
+                    _secret_store.set_secret("sql", name, pw)
                 sanitized[name] = c
             else:
                 sanitized[name] = cfg
@@ -134,6 +141,15 @@ def _save_cfg():
 def _connect(cfg):
     """根据配置建立连接，返回 (conn, err)"""
     db_type = (cfg.get("type") or "sqlite").lower()
+    # 解析密码：先从系统凭据库取，再回退 cfg 内（兼容老用户 cfg 里残留的明文）
+    conn_name = cfg.get("name") or "default"
+    password = ""
+    if db_type in ("mysql", "postgresql"):
+        try:
+            from . import _secret_store
+            password = _secret_store.get_secret("sql", conn_name) or cfg.get("password", "")
+        except Exception:
+            password = cfg.get("password", "")
     try:
         if db_type == "sqlite":
             import sqlite3
@@ -147,7 +163,7 @@ def _connect(cfg):
                 host=cfg.get("host", "127.0.0.1"),
                 port=int(cfg.get("port", 3306)),
                 user=cfg.get("user"),
-                password=cfg.get("password", ""),
+                password=password,
                 database=cfg.get("database"),
                 connection_timeout=QUERY_TIMEOUT,
             )
@@ -158,7 +174,7 @@ def _connect(cfg):
                 host=cfg.get("host", "127.0.0.1"),
                 port=int(cfg.get("port", 5432)),
                 user=cfg.get("user"),
-                password=cfg.get("password", ""),
+                password=password,
                 dbname=cfg.get("database"),
                 connect_timeout=QUERY_TIMEOUT,
             )
@@ -379,7 +395,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "db_connect",
-            "description": "配置并测试数据库连接，配置会持久化以便后续复用。SQLite 只需提供 path；MySQL/PostgreSQL 提供 host/port/user/password/database。",
+            "description": "配置并测试数据库连接，连接配置（不含密码）会持久化以便后续复用。SQLite 只需提供 path；MySQL/PostgreSQL 提供 host/port/user/password/database。密码加密保存在系统凭据库（Windows 凭据管理器 / macOS Keychain / Linux Secret Service），重启后无需重输；如需修改密码请重新调用本工具传入新密码。",
             "parameters": {
                 "type": "object",
                 "properties": {
