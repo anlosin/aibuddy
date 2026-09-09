@@ -1,47 +1,69 @@
-"""QML demo 离屏截图 — 浅色/深色各一张。
+"""QML demo 离屏截图 — 浅色/深色 + Day1-2 流式演示。
 
 用法：
     QT_QPA_PLATFORM=offscreen QSG_RHI_BACKEND=software \
         ./.venv/Scripts/python.exe -m qwen_app.qml_screenshot
+    或加参数 day12 跑 Day 1-2 流式演示
 """
 import os
 import sys
 
+from PyQt5.QtCore import QUrl, QTimer
+from PyQt5.QtGui import QGuiApplication
+from PyQt5.QtQml import QQmlApplicationEngine
 
-def render_theme(theme_name, out_path, app, engine):
-    """复用传入的 app/engine，切换主题后截图"""
-    from PyQt5.QtCore import QTimer
+
+def _grab_to_file(engine, app, out_path, label):
     from PyQt5.QtQuick import QQuickWindow
-
-    roots = engine.rootObjects()
-    if not roots:
-        print(f"ERROR [{theme_name}]: QML 加载失败")
+    win = engine.rootObjects()[0]
+    if isinstance(win, QQuickWindow):
+        content = win.contentItem()
+    else:
+        try:
+            import PyQt5.sip as sip
+            qquick = sip.cast(win, QQuickWindow)
+            content = qquick.contentItem()
+        except Exception as e:
+            print(f"FAIL [{label}]: cast err {e}")
+            QTimer.singleShot(100, app.quit)
+            return
+    if content is None:
+        print(f"FAIL [{label}]: no contentItem (win type={type(win).__name__})")
+        QTimer.singleShot(100, app.quit)
         return
-    win = roots[0]
-    win.setProperty("themeName", theme_name)
+    result = content.grabToImage()
+    def on_ready():
+        if result.image().save(out_path):
+            print(f"OK [{label}]: {out_path} ({os.path.getsize(out_path)} bytes)")
+        else:
+            print(f"FAIL [{label}]: save failed")
+        QTimer.singleShot(100, app.quit)
+    result.ready.connect(on_ready)
 
-    captured = []
-    def do_shot():
-        content = win.contentItem() if hasattr(win, "contentItem") else None
-        if content is None:
-            print(f"FAIL [{theme_name}]: no contentItem")
-            QTimer.singleShot(100, app.quit)
-            return
-        result = content.grabToImage()
-        if result is None:
-            print(f"FAIL [{theme_name}]: grabToImage returned None")
-            QTimer.singleShot(100, app.quit)
-            return
-        def on_ready():
-            if result.image().save(out_path):
-                print(f"OK [{theme_name}]: {out_path} "
-                      f"({os.path.getsize(out_path)} bytes)")
-            else:
-                print(f"FAIL [{theme_name}]: save failed")
-            QTimer.singleShot(100, app.quit)
-        result.ready.connect(on_ready)
 
-    QTimer.singleShot(2500, do_shot)
+def render_static_themes(repo, app, engine, bridge):
+    plans = [("light", "preview_qtquick_light.png"),
+             ("dark",  "preview_qtquick_dark.png")]
+    for theme, fname in plans:
+        out_path = os.path.join(repo, fname)
+        bridge.set_theme(theme)
+        QTimer.singleShot(800, lambda p=out_path, t=theme: _grab_to_file(engine, app, p, t))
+        app.exec_()
+
+
+def render_day12(repo, app, engine, bridge):
+    out_path = os.path.join(repo, "preview_qtquick_day12.png")
+    print(f"Day 1-2 截图: {out_path}")
+
+    def step1_send():
+        print("  [step1] bridge.send_message('帮我写个 Python 快速排序')")
+        bridge.send_message("帮我写个 Python 快速排序")
+        QTimer.singleShot(3500, step2_grab)
+
+    def step2_grab():
+        _grab_to_file(engine, app, out_path, "day12")
+
+    QTimer.singleShot(2500, step1_send)
     app.exec_()
 
 
@@ -49,22 +71,36 @@ def main():
     if "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-    from PyQt5.QtCore import QUrl
-    from PyQt5.QtGui import QGuiApplication
-    from PyQt5.QtQml import QQmlApplicationEngine
+    from .chat_bridge import ChatBridge
 
+    want_day12 = "day12" in sys.argv
     app = QGuiApplication(sys.argv)
     engine = QQmlApplicationEngine()
-    engine.warnings.connect(lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
+    engine.warnings.connect(
+        lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
+
+    # 关键：bridge 必须在 engine.load() 之前注入
+    bridge = ChatBridge(theme="light")
+    engine.rootContext().setContextProperty("bridge",bridge)
+
     qml_dir = os.path.join(os.path.dirname(__file__), "qml")
     engine.addImportPath(qml_dir)
     engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
 
+    if not engine.rootObjects():
+        print("ERROR: QML 加载失败")
+        sys.exit(1)
+
+    win = engine.rootObjects()[0]
+    bridge_loaded = win.property("bridge") is not None
+    print(f"  bridge 属性已注入: {bridge_loaded}")
+
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out_light = os.path.join(repo, "preview_qtquick_light.png")
-    out_dark = os.path.join(repo, "preview_qtquick_dark.png")
-    render_theme("light", out_light, app, engine)
-    render_theme("dark", out_dark, app, engine)
+
+    if want_day12:
+        render_day12(repo, app, engine,bridge)
+    else:
+        render_static_themes(repo, app, engine,bridge)
 
 
 if __name__ == "__main__":

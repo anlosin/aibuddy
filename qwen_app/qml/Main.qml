@@ -7,10 +7,10 @@ ApplicationWindow {
     visible: true
     width: 1100
     height: 760
-    title: "aibuddy (QtQuick Demo)"
+    title: "aibuddy (QtQuick Day 1-2 Demo)"
 
     // 主题切换：light / dark
-    property string themeName: "light"
+    property string themeName: bridge ? bridge.get_theme() : "light"
 
     color: themeName === "dark" ? "#0E0F12" : "#F8F9FB"
 
@@ -44,7 +44,7 @@ ApplicationWindow {
             "avatarAi": "#4E6EF2",
             "avatarUser": "#23B36B",
             "tsColor": "#B0B4BD",
-            "shadow": "#1A000000",       // ARGB 10% 黑
+            "shadow": "#1A000000",
         },
         "dark": {
             "appBg": "#0E0F12",
@@ -74,11 +74,16 @@ ApplicationWindow {
             "avatarAi": "#4E6EF2",
             "avatarUser": "#23B36B",
             "tsColor": "#5A5E68",
-            "shadow": "#66000000",       // ARGB 40% 黑
+            "shadow": "#66000000",
         }
     })[themeName]
 
-    // mock 数据：会话列表
+    // ===== 消息列表（动态，bridge 信号驱动）=====
+    ListModel {
+        id: messageModel
+    }
+
+    // 会话列表（仍用 mock，因为 Day 1-2 范围不含会话管理）
     ListModel {
         id: convModel
         ListElement { name: "Python 快速排序"; time: "10:01"; sel: true }
@@ -86,36 +91,48 @@ ApplicationWindow {
         ListElement { name: "Code Review: scheduler.py"; time: "昨天" }
         ListElement { name: "Git 撤销 push"; time: "周一" }
         ListElement { name: "PyQt5 vs QtQuick 调研"; time: "上周" }
-        ListElement { name: "keyring 凭据方案"; time: "上周" }
-        ListElement { name: "项目部署到 Kubernetes"; time: "08-21" }
     }
 
-    // mock 数据：消息列表（包含代码段、用户/AI 混排）
-    ListModel {
-        id: messageModel
-        ListElement { who: "user"; text: "帮我写个 Python 快速排序"; ts: "10:00"; hasCode: false }
-        ListElement {
-            who: "ai"
-            text: "好的，这是标准实现，时间复杂度 O(n log n)："
-            ts: "10:00"
-            hasCode: true
-            code: "def quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[0]\n    left = [x for x in arr[1:] if x < pivot]\n    right = [x for x in arr[1:] if x >= pivot]\n    return quicksort(left) + [pivot] + quicksort(right)"
+    // ===== 监听 bridge的信号 → 推入messageModel =====
+    Connections {
+        target: bridge
+        enabled:bridge !== null
+        // 完整新消息
+        function onMessageAdded(who, text, ts, hasCode, code) {
+            messageModel.append({
+                "who": who,
+                "text": text,
+                "ts": ts,
+                "hasCode": hasCode,
+                "code": code
+            })
+            msgList.positionViewAtEnd()
         }
-        ListElement { who: "user"; text: "能用一行实现吗？"; ts: "10:01"; hasCode: false }
-        ListElement {
-            who: "ai"
-            text: "可以，但可读性会差："
-            ts: "10:01"
-            hasCode: true
-            code: "qs = lambda a: a and (qs([x for x in a[1:] if x < a[0]]) + [a[0]] + qs([x for x in a[1:] if x >= a[0]])) or []"
+        // 流式追加到最后一个气泡
+        function onAppendToLast(who, content) {
+            const idx = messageModel.count - 1
+            if (idx < 0) return
+            const cur = messageModel.get(idx)
+            messageModel.set(idx, { "text": cur.text + content })
         }
-        ListElement { who: "user"; text: "如果是浮点数且要稳定排序呢？"; ts: "10:02"; hasCode: false }
-        ListElement {
-            who: "ai"
-            text: "稳定排序建议用归并排序，或者在快排基础上加索引："
-            ts: "10:02"
-            hasCode: true
-            code: "# 给每个元素附加原始下标，归并后再丢掉\ndata = [(v, i) for i, v in enumerate(arr)]\ndata.sort(key=lambda x: x[0])  # Python sort 是稳定的\nreturn [v for v, _ in data]"
+        // 完成最后一个气泡
+        function onFinalizeLast(who) {
+            // 简化：什么都不做（真实实现会停止光标、刷历史等）
+        }
+        // 错误气泡
+        function onAppendError(who, text) {
+            messageModel.append({
+                "who": "error",
+                "text": text,
+                "ts": "",
+                "hasCode": false,
+                "code": ""
+            })
+            msgList.positionViewAtEnd()
+        }
+        // 主题切换
+        function onThemeChanged(name) {
+            root.themeName = name
         }
     }
 
@@ -129,8 +146,6 @@ ApplicationWindow {
             Layout.preferredWidth: 280
             Layout.fillHeight: true
             color: root.pal.sidebarBg
-
-            // 右侧 1px 分隔线
             Rectangle {
                 anchors.right: parent.right
                 anchors.top: parent.top
@@ -144,7 +159,6 @@ ApplicationWindow {
                 anchors.margins: 12
                 spacing: 4
 
-                // 顶部 logo + 主题切换
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.bottomMargin: 12
@@ -165,7 +179,6 @@ ApplicationWindow {
                         font.bold: true
                         Layout.fillWidth: true
                     }
-                    // 主题切换
                     Rectangle {
                         width: 32; height: 32; radius: 8
                         color: themeMa.containsMouse ? root.pal.sidebarHover : "transparent"
@@ -179,12 +192,11 @@ ApplicationWindow {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.themeName = root.themeName === "dark" ? "light" : "dark"
+                            onClicked: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
                         }
                     }
                 }
 
-                // "新建对话" 按钮
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 40
@@ -205,7 +217,6 @@ ApplicationWindow {
                     }
                 }
 
-                // 标题
                 Text {
                     text: "最近对话"
                     color: root.pal.textTertiary
@@ -216,22 +227,19 @@ ApplicationWindow {
                     Layout.leftMargin: 10
                 }
 
-                // 会话列表
                 ListView {
-                    id: convList
+                    id: convListView
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     model: convModel
                     clip: true
                     spacing: 2
-                    delegate: Rectangle {
+                    delegate:Rectangle {
                         width: ListView.view.width
                         height: 60
                         radius: 10
                         color: model.sel ? root.pal.sidebarSel
                             : (rowMa.containsMouse ? root.pal.sidebarHover : "transparent")
-
-                        // 选中态：左侧 3px 蓝色指示条
                         Rectangle {
                             visible: model.sel
                             anchors.left: parent.left
@@ -242,7 +250,6 @@ ApplicationWindow {
                             radius: 1.5
                             color: root.pal.sendBtn
                         }
-
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 14
@@ -266,7 +273,6 @@ ApplicationWindow {
                                     font.pixelSize: 11
                                 }
                             }
-                            // 更多操作按钮
                             Rectangle {
                                 Layout.preferredWidth: 24
                                 Layout.preferredHeight: 24
@@ -307,7 +313,6 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 0
 
-                // 顶栏
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 56
@@ -324,7 +329,6 @@ ApplicationWindow {
                         anchors.leftMargin: 20
                         anchors.rightMargin: 20
                         spacing: 12
-                        // 模型/专家切换
                         Rectangle {
                             Layout.preferredHeight: 32
                             Layout.preferredWidth: 200
@@ -342,7 +346,7 @@ ApplicationWindow {
                                     font.pixelSize: 14
                                 }
                                 Text {
-                                    text: "Qwen-Max"
+                                    text: "Qwen-Max (mock)"
                                     color: root.pal.textPrimary
                                     font.pixelSize: 13
                                     font.bold: true
@@ -362,40 +366,12 @@ ApplicationWindow {
                             }
                         }
                         Item { Layout.fillWidth: true }
-                        // 工具按钮组
-                        Row {
-                            spacing: 4
-                            Repeater {
-                                model: [
-                                    {icon: "🔧", tip: "插件管理"},
-                                    {icon: "⏰", tip: "自动化任务"},
-                                    {icon: "⚙", tip: "偏好设置"}
-                                ]
-                                delegate: Rectangle {
-                                    width: 32; height: 32; radius: 8
-                                    color: toolMa.containsMouse ? root.pal.sidebarHover : "transparent"
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: modelData.icon
-                                        font.pixelSize: 14
-                                    }
-                                    MouseArea {
-                                        id: toolMa
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        ToolTip.text: modelData.tip
-                                        ToolTip.visible: toolMa.containsMouse
-                                        ToolTip.delay: 500
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
 
                 // 消息列表
                 ListView {
+                    id: msgList
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     model: messageModel
@@ -416,7 +392,6 @@ ApplicationWindow {
                             anchors.top: parent.top
                             spacing: 6
 
-                            // 时间戳
                             Text {
                                 text: ts
                                 color: root.pal.tsColor
@@ -424,11 +399,9 @@ ApplicationWindow {
                                 Layout.alignment: Qt.AlignHCenter
                             }
 
-                            // 气泡行
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 0
-                                // 用户消息：右推
                                 Item {
                                     Layout.fillWidth: who === "user"
                                     Layout.preferredHeight: 1
@@ -440,7 +413,6 @@ ApplicationWindow {
                                     code: hasCode ? code : ""
                                     Layout.preferredWidth: 680
                                 }
-                                // AI 消息：左推
                                 Item {
                                     Layout.fillWidth: who === "ai"
                                     Layout.preferredHeight: 1
@@ -467,7 +439,6 @@ ApplicationWindow {
                         anchors.margins: 16
                         spacing: 10
 
-                        // 输入框
                         Rectangle {
                             id: inputBox
                             Layout.fillWidth: true
@@ -476,7 +447,6 @@ ApplicationWindow {
                             color: inputField.activeFocus ? root.pal.inputBgFocus : root.pal.inputBg
                             border.color: inputField.activeFocus ? root.pal.inputBorderFocus : root.pal.inputBorder
                             border.width: 1
-                            // 焦点态 6px 蓝色光晕
                             Rectangle {
                                 anchors.fill: parent
                                 anchors.margins: -3
@@ -487,13 +457,12 @@ ApplicationWindow {
                                     : "transparent"
                                 border.width: inputField.activeFocus ? 6 : 0
                             }
-                            // 多行输入
                             ScrollView {
                                 anchors.fill: parent
                                 anchors.margins: 8
                                 TextArea {
                                     id: inputField
-                                    placeholderText: "发消息…（Shift+Enter 换行）"
+                                    placeholderText: "试试发送：帮我写个 Python 快速排序"
                                     placeholderTextColor: root.pal.textTertiary
                                     color: root.pal.textPrimary
                                     font.pixelSize: 14
@@ -501,11 +470,20 @@ ApplicationWindow {
                                     background: null
                                     selectByMouse: true
                                     persistentSelection: true
+                                    Keys.onReturnPressed: function(event) {
+                                        if (event.modifiers & Qt.ShiftModifier) {
+                                            // Shift+Enter 换行
+                                            event.accepted = false
+                                        } else {
+                                            if (bridge)bridge.send_message(text)
+                                            text = ""
+                                            event.accepted = true
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        // 发送按钮
                         Rectangle {
                             Layout.preferredWidth: 96
                             Layout.preferredHeight: 56
@@ -523,6 +501,7 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
+                                onClicked: if (bridge)bridge.send_message(inputField.text)
                             }
                         }
                     }
