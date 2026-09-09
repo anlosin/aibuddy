@@ -147,10 +147,96 @@ def next_run_time(auto, now):
 
 
 def is_due(auto, now):
+    """判断任务在 `now` 时刻是否应该自动触发。
+
+    语义：距离上次执行已过满一个完整间隔（或到达一次性时间点），
+    且该触发点尚未被本次执行消费过。
+
+    与 `next_run_time`（用于 UI 展示"下次理论时间"）解耦：next_run_time
+    总是返回未来时间，is_due 必须独立判定"是否已过期"。
+
+    分周期策略：
+    - interval：last_run + every*unit ≤ now 视为到期
+    - daily：今天 h:m ≤ now 且 last_run 不在今天 h:m 之后
+    - weekly：往前回溯最多 3 天，命中 weekday 且 h:m ≤ now
+              且 last_run 不在该时刻之后
+    - once：s.datetime ≤ now 且 last_run < s.datetime
+    """
     if not auto.get("enabled", True):
         return False
-    nxt = next_run_time(auto, now)
-    return nxt is not None and nxt <= now
+    s = auto.get("schedule") or {}
+    typ = (s.get("type") or "interval").lower()
+    last = _parse_last_run(auto)
+    # 鲁棒性兜底：手改 JSON 等原因导致 schedule 字段损坏（time='9-30'、weekdays 非列表等）
+    # 时，_parse_clock 等会抛 ValueError/TypeError；这种坏配置不应让整个 check_due
+    # 中断其他任务调度，退化为不触发并把异常留待调度循环记录到 last_error。
+    try:
+        return _is_due_compute(typ, s, last, now)
+    except (ValueError, TypeError, KeyError) as e:
+        print(f"[Scheduler] 任务 {auto.get('name', auto.get('id', '?'))} 配置异常，"
+              f"跳过本次触发: {type(e).__name__}: {e}")
+        return False
+
+
+def _is_due_compute(typ, s, last, now):
+    if typ == "interval":
+        if last is None:
+            return True  # 从未执行过 → 立即到期
+        unit = (s.get("unit") or "minutes").lower()
+        every = max(1, int(s.get("every", 1)))
+        delta = {
+            "minutes": timedelta(minutes=every),
+            "hours": timedelta(hours=every),
+            "days": timedelta(days=every),
+        }.get(unit, timedelta(minutes=every))
+        return (last + delta) <= now
+
+    if typ == "daily":
+        h, m = _parse_clock(s.get("time"))
+        today_trigger = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if now < today_trigger:
+            return False  # 今天的触发点还没到
+        # 已到今天触发点：只有"上次执行不在今天触发点之后"才到期
+        if last is None:
+            return True
+        return last < today_trigger
+
+    if typ == "weekly":
+        h, m = _parse_clock(s.get("time"))
+        days = set(s.get("weekdays") or [0, 1, 2, 3, 4, 5, 6])
+        # 往回看最多 3 天（覆盖跨日情况），找最近的命中点
+        for offset in range(0, 4):
+            cand = (now - timedelta(days=offset)).replace(
+                hour=h, minute=m, second=0, microsecond=0)
+            if cand.weekday() in days and cand <= now:
+                # 该点已过且尚未被本次执行消费
+                if last is None or last < cand:
+                    return True
+        return False
+
+    if typ == "once":
+        try:
+            dt = datetime.fromisoformat(s.get("datetime"))
+        except Exception:
+            return False
+        if dt > now:
+            return False
+        if last is None:
+            return True
+        return last < dt  # 已过但尚未消费
+
+    return False
+
+
+def _parse_last_run(auto):
+    """解析 last_run ISO 字符串为 datetime；失败或缺失时返回 None。"""
+    last = auto.get("last_run")
+    if not last:
+        return None
+    try:
+        return datetime.fromisoformat(last)
+    except Exception:
+        return None
 
 
 def describe_schedule(sched):
