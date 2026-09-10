@@ -36,6 +36,8 @@ ApplicationWindow {
             "inputBorderFocus": "#4F8AF7",
             "sendBtn": "#4F8AF7",
             "sendBtnHover": "#3B5BEF",
+            "stopBtn": "#E55656",
+            "stopBtnHover": "#C73B3B",
             "textPrimary": "#1F1F1F",
             "textSecondary": "#8A8F99",
             "textTertiary": "#B0B4BD",
@@ -66,6 +68,8 @@ ApplicationWindow {
             "inputBorderFocus": "#4F8AF7",
             "sendBtn": "#3D6FE0",
             "sendBtnHover": "#2D5FE0",
+            "stopBtn": "#E55656",
+            "stopBtnHover": "#C73B3B",
             "textPrimary": "#E8E8E8",
             "textSecondary": "#888C97",
             "textTertiary": "#5A5E68",
@@ -491,23 +495,43 @@ ApplicationWindow {
                         }
 
                         Rectangle {
+                            id: actionBtn
                             Layout.preferredWidth: 96
                             Layout.preferredHeight: 56
                             radius: 14
-                            color: sendMa.containsMouse ? root.pal.sendBtnHover : root.pal.sendBtn
+                            // Day 7: 根据 bridge.isBusy 切换颜色/文本/点击行为
+                            // 用 enabled 卫士防止 QML 加载时 bridge 未注入导致 binding 段错误
+                            enabled: bridge !== undefined && bridge !== null
+                            color: {
+                                if (!enabled) return root.pal.sendBtn
+                                if (bridge.isBusy) {
+                                    return actionMa.containsMouse ? root.pal.stopBtnHover : root.pal.stopBtn
+                                }
+                                return actionMa.containsMouse ? root.pal.sendBtnHover : root.pal.sendBtn
+                            }
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
                             Text {
                                 anchors.centerIn: parent
-                                text: "发送"
+                                text: (bridge && bridge.isBusy) ? "停止" : "发送"
                                 color: "white"
                                 font.pixelSize: 15
                                 font.bold: true
                             }
                             MouseArea {
-                                id: sendMa
+                                id: actionMa
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: if (bridge)bridge.send_message(inputField.text)
+                                onClicked: {
+                                    if (!bridge) return
+                                    if (bridge.isBusy) {
+                                        bridge.stop_chat()
+                                    } else {
+                                        bridge.send_message(inputField.text)
+                                        inputField.text = ""
+                                    }
+                                }
                             }
                         }
                     }

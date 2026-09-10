@@ -15,7 +15,7 @@ QML 端不需要知道走的是 mock 还是 real 路径，看到的都是：
 """
 from datetime import datetime
 from types import SimpleNamespace
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer
 
 from .worker import WorkerThread
 from .theme import markdown_to_html
@@ -32,15 +32,26 @@ class ChatBridge(QObject):
     messageReplaced = pyqtSignal(str, str)                  # who, rendered_html (Day 6)
 
     # ============ 内部状态（暴露给测试/QML 读）============
-    busyChanged = pyqtSignal(bool)                          # 是否正在生成中（可让发送按钮变停）
-    isBusy = False
+    busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
+
+    def _get_busy(self) -> bool:
+        return self._is_busy
+
+    def _set_busy(self, busy: bool):
+        if busy != self._is_busy:
+            self._is_busy = busy
+            self.busyChanged.emit(busy)
+
+    isBusy = pyqtProperty(bool, _get_busy, _set_busy, notify=busyChanged)
 
     def __init__(self, theme="light", parent=None):
         super().__init__(parent)
         self._theme = theme
+        self._is_busy = False   # Day 7: pyqtProperty backend (use _set_busy to update)
         self._last_who = None      # 当前正在流式的气泡 who
         # Day 6: 累积 buffer（按 who 维度），finalize 时用 markdown_to_html 渲染
         self._stream_buffers = {}
+        self._worker = None  # Day 7: 在初始化时就设为 None（避免 stop_chat 报 AttributeError）
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
@@ -79,21 +90,28 @@ class ChatBridge(QObject):
 
     @pyqtSlot()
     def stop_chat(self):
-        """QML 调用的停止生成（暂未实现，Day 6+ 补）"""
-        if self._worker is not None:
-            self._worker.stop()
-            self._worker = None
-            self._set_busy(False)
+        """Day 7: QML 调用的停止生成 - 设停止信号 + 封口当前气泡 + 等线程退出
+
+        不主动 _set_busy(False)，让 QThread.finished -> _on_worker_finished 兑底
+        不立即 self._worker = None（避免 race: worker 线程还在跑时已清空）
+        """
+        if self._worker is None:
+            return
+        self._worker.stop()
+        # Day 7: 当前正在流式的气泡要封口（finalize + flush markdown 渲染）
+        if self._last_who:
+            self._flush_stream_buffer(self._last_who)
+            self.finalizeLast.emit(self._last_who)
+            self._last_who = None
+        # 等线程退出（最多 2s），防止主线程提前退出导致 Qt 报 "QThread: Destroyed while thread is still running"
+        if self._worker.isRunning():
+            self._worker.wait(2000)
 
     # ============ 内部辅助 ============
     def _send_user_bubble(self, text: str):
         ts = datetime.now().strftime("%H:%M")
         self.messageAdded.emit("user", text, ts, False, "")
 
-    def _set_busy(self, busy: bool):
-        if busy != self.isBusy:
-            self.isBusy = busy
-            self.busyChanged.emit(busy)
 
     # ============ Day 3-5: 真实流式（用 fake OpenAI client 跑真 WorkerThread）============
     def start_real_chat(self, user_text: str):
