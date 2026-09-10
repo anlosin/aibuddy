@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
 
 from .worker import WorkerThread
+from .theme import markdown_to_html
 
 
 class ChatBridge(QObject):
@@ -28,6 +29,7 @@ class ChatBridge(QObject):
     finalizeLast = pyqtSignal(str)                          # who
     appendError = pyqtSignal(str, str)                      # who, text
     themeChanged = pyqtSignal(str)                          # "light" | "dark"
+    messageReplaced = pyqtSignal(str, str)                  # who, rendered_html (Day 6)
 
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # 是否正在生成中（可让发送按钮变停）
@@ -37,7 +39,8 @@ class ChatBridge(QObject):
         super().__init__(parent)
         self._theme = theme
         self._last_who = None      # 当前正在流式的气泡 who
-        self._stream_timer = None    # 防止短时间重复 emit（节流）
+        # Day 6: 累积 buffer（按 who 维度），finalize 时用 markdown_to_html 渲染
+        self._stream_buffers = {}
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
@@ -139,21 +142,34 @@ class ChatBridge(QObject):
             ts = datetime.now().strftime("%H:%M")
             self.messageAdded.emit(who, "", ts, False, "")
             self._last_who = who
+        # Day 6: 累积 buffer（流式期间用 PlainText 显示，finalize 时用 Markdown 替换）
+        self._stream_buffers[who] = self._stream_buffers.get(who, "") + content
         self.appendToLast.emit(who, content)
 
     def _on_worker_complete(self, full: str):
-        """WorkerThread.response_complete → QML.finalizeLast"""
+        """WorkerThread.response_complete → finalizeLast + 渲染 Markdown → messageReplaced"""
         if self._last_who:
             self.finalizeLast.emit(self._last_who)
+            # Day 6: 流式结束后用 markdown_to_html 渲染整段 → 替换气泡为富文本
+            self._flush_stream_buffer(self._last_who)
         self._last_who = None
+
+    def _flush_stream_buffer(self, who: str):
+        """Day 6: 取 buffer → markdown_to_html → emit messageReplaced 让 QML 替换"""
+        buf = self._stream_buffers.pop(who, "")
+        if not buf:
+            return
+        rendered = markdown_to_html(buf, self._theme)
+        self.messageReplaced.emit(who, rendered)
 
     def _on_worker_error(self, msg: str):
         """WorkerThread.error_occurred → QML.appendError"""
         from datetime import datetime as _dt
         ts = _dt.now().strftime("%H:%M")
         self.appendError.emit("error", f"{msg} ({ts})")
-        # 错误时收尾（解 busy、清最后气泡）
+        # 错误时收尾（flush buffer + finalize + 解 busy）
         if self._last_who:
+            self._flush_stream_buffer(self._last_who)
             self.finalizeLast.emit(self._last_who)
             self._last_who = None
 
@@ -200,15 +216,24 @@ def _make_fake_openai_client(user_text: str):
         choice = SimpleNamespace(index=0, delta=delta, finish_reason="stop" if is_last else None)
         return SimpleNamespace(id="mock", choices=[choice], model="mock-qwen", object="chat.completion.chunk")
 
-    # 把 user_text 拆成几个 chunk，模拟流式
+    # Day 6: 故意包含 markdown 语法（加粗 / 行内代码 / 围栏代码 / 列表 / 标题）
+    # 流式阶段 PlainText 显示，finalize 时 messageReplaced 触发 markdown 渲染版
     text = (
-        f"你说：{user_text}\n\n"
-        "这是 fake OpenAI client 模拟的流式响应（Day 3-5）。\n\n"
-        "**验证通过**：\n"
-        "1. WorkerThread 启动成功\n"
-        "2. chunk_received 逐个 emit\n"
-        "3. ChatBridge 桥接到 QML\n"
-        "4. QML 端 appendToLast 实时追加"
+        f"你说的是 **" + user_text + "**。\n\n"
+        "下面给你看个 Python `quicksort` 的实现：\n\n"
+        "```python\n"
+        "def quicksort(arr):\n"
+        "    if len(arr) <= 1:\n"
+        "        return arr\n"
+        "    pivot = arr[0]\n"
+        "    left = [x for x in arr[1:] if x < pivot]\n"
+        "    right = [x for x in arr[1:] if x >= pivot]\n"
+        "    return quicksort(left) + [pivot] + quicksort(right)\n"
+        "```\n\n"
+        "**关键点**：\n"
+        "- 时间复杂度 O(n log n)\n"
+        "- 空间复杂度 O(n)\n"
+        "- 不稳定排序\n"
     )
     chunk_size = 15
     pieces = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]

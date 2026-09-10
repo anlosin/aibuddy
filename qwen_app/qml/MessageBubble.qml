@@ -73,7 +73,7 @@ Rectangle {
                 font.family: "Microsoft YaHei"
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                textFormat: Text.PlainText
+                textFormat: Text.RichText
             }
             // 代码段
             Rectangle {
@@ -91,7 +91,7 @@ Rectangle {
                     font.family: "Consolas, Courier New, monospace"
                     font.pixelSize: 13
                     wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
+                    textFormat: Text.RichText
                 }
             }
         }

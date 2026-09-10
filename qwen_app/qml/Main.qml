@@ -117,7 +117,13 @@ ApplicationWindow {
         }
         // 完成最后一个气泡
         function onFinalizeLast(who) {
-            // 简化：什么都不做（真实实现会停止光标、刷历史等）
+            // Day 6: 真实实现会停止光标、刷历史等。Markdown 渲染由 messageReplaced 接管。
+        }
+        // Day 6: 流式完成后用 Markdown 渲染版替换最后一个气泡
+        function onMessageReplaced(who, newText) {
+            const idx = messageModel.count - 1
+            if (idx < 0) return
+            messageModel.set(idx, { "text": newText })
         }
         // 错误气泡
         function onAppendError(who, text) {
