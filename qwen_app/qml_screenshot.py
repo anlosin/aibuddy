@@ -82,6 +82,10 @@ def main():
 
     # 关键：bridge 必须在 engine.load() 之前注入
     bridge = ChatBridge(theme="light")
+    # Day 9: screenshot 截图场景默认用 fake（不烧 token），用户跑 main.py 才是真 LLM
+    from . import chat_bridge as _cb_mod
+    _orig_start = _cb_mod.ChatBridge.start_real_chat
+    _cb_mod.ChatBridge.start_real_chat = lambda self, text, **kw: _orig_start(self, text, use_fake=True)
     engine.rootContext().setContextProperty("bridge",bridge)
 
     qml_dir = os.path.join(os.path.dirname(__file__), "qml")

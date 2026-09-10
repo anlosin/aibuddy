@@ -1,6 +1,21 @@
-"""AI 对话助手 — 入口"""
-import sys
+"""AI 对话助手 — 入口。
+
+Day 9: 默认走 QtQuick UI（QML）。若 QML 加载失败 → fallback 到 PyQt5 chat_window。
+
+启动顺序：
+1. QApplication 创建（同时支持 QML + widgets）
+2. ChatBridge 实例（QML 侧使用）
+3. 加载 Main.qml，注入 bridge 为上下文属性
+4. 加载失败 → fallback到 PyQt5 ChatWindow
+
+用法：
+    python main.py                # 默认 QtQuick
+    python main.py --pyqt5        # 强制用 PyQt5 ChatWindow
+    python main.py --qtquick      # 默认（仅为明确语义）
+"""
 import os
+import sys
+
 
 # 把项目根目录加入 sys.path，使 qwen_app 包可导入（直接 `python main.py` 也能跑）
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -11,32 +26,37 @@ if _ROOT not in sys.path:
 import warnings
 warnings.filterwarnings("ignore", message=".*iCCP.*")
 
+
 class _StderrFilter:
     """过滤 stderr 中 libpng 的 iCCP 警告"""
     def __init__(self, real_stderr):
         self._stderr = real_stderr
+
     def write(self, s):
         if "iCCP" not in s and "cHRM" not in s and "sRGB" not in s:
             self._stderr.write(s)
+
     def flush(self):
         self._stderr.flush()
 
+
 sys.stderr = _StderrFilter(sys.stderr)
 
+from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt
-from qwen_app.chat_window import ChatWindow
+from PyQt5.QtQml import QQmlApplicationEngine
 
-if __name__ == "__main__":
+from qwen_app.chat_bridge import ChatBridge
+
+
+def _setup_qt_app(app):
+    """复用 PyQt5 原有的全局加固（颜色/字体）"""
     if hasattr(Qt, 'AA_EnableHighDpiScaling'):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
-    app = QApplication(sys.argv)
     app.setStyle("Fusion")
-
-    # 全局加固：Fusion 风格下，自定义白底 QSS 的 QComboBox 弹窗项在 hover/选中时
+    # Fusion 风格下，自定义白底 QSS 的 QComboBox 弹窗项在 hover/选中时
     # 文字颜色未被显式定义会继承成透明（悬停即空白行）。此处统一给所有下拉弹窗
     # 的 item 各状态定义深色文字 + 浅色背景，彻底杜绝该 bug。
     app.setStyleSheet("""
@@ -61,11 +81,67 @@ if __name__ == "__main__":
             background: #F2F4F8;
         }
     """)
-
     font = app.font()
     font.setFamily("Microsoft YaHei")
     app.setFont(font)
 
+
+def run_qtquick(app):
+    """走 QtQuick UI 路径。返回是否启动成功。"""
+    engine = QQmlApplicationEngine()
+    engine.warnings.connect(
+        lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
+
+    bridge = ChatBridge(theme="light")
+    engine.rootContext().setContextProperty("bridge", bridge)
+
+    qml_dir = os.path.join(os.path.dirname(__file__), "qwen_app", "qml")
+    engine.addImportPath(qml_dir)
+    engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
+
+    roots = engine.rootObjects()
+    if not roots:
+        print("[main] QtQuick UI 加载失败，fallback 到 PyQt5", file=sys.stderr)
+        return False
+    win = roots[0]
+    if win.property("visible") is False:
+        win.setProperty("visible", True)
+    print("[main] QtQuick UI 已启动")
+    print(f"[main] bridge.isBusy = {bridge.isBusy}, 当前会话 = {bridge._current_conv_id}")
+    print(f"[main] 当前模型 = {bridge._last_model_name}")
+    return True
+
+
+def run_pyqt5(app):
+    """Fallback 路径：原 PyQt5 ChatWindow"""
+    from qwen_app.chat_window import ChatWindow
+    print("[main] 走 PyQt5 ChatWindow (原始路径)", file=sys.stderr)
     window = ChatWindow()
     window.show()
+    return True
+
+
+def main():
+    args = sys.argv[1:]
+    force_pyqt5 = "--pyqt5" in args
+    force_qtquick = "--qtquick" in args
+    # 默认走 QtQuick
+
+    app = QApplication(sys.argv)
+    _setup_qt_app(app)
+
+    if force_pyqt5:
+        run_pyqt5(app)
+    elif force_qtquick:
+        run_qtquick(app)
+    else:
+        # 默认 QtQuick；加载失败则 fallback
+        ok = run_qtquick(app)
+        if not ok:
+            run_pyqt5(app)
+
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

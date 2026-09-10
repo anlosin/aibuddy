@@ -62,6 +62,14 @@ class ChatBridge(QObject):
             self._current_conv_id = _cur
         except Exception:
             self._current_conv_id = None
+        self._last_model_name = "(none)"  # Day 9: 最后使用的模型名（错误提示用）
+        # Day 9: 启动时立即从 config 读当前模型名（QML 顶栏要显示）
+        try:
+            _m = _config.get_current_model()
+            if _m:
+                self._last_model_name = _m.get("name") or _m.get("model_id", "?")
+        except Exception:
+            pass
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
@@ -208,17 +216,42 @@ class ChatBridge(QObject):
 
 
     # ============ Day 3-5: 真实流式（用 fake OpenAI client 跑真 WorkerThread）============
-    def start_real_chat(self, user_text: str):
-        """启动一个真 WorkerThread，client 是 fake 的（不发真请求）。
+    def start_real_chat(self, user_text: str, use_fake: bool = False):
+        """Day 9: 启动一个真 WorkerThread。client 优先从 config 读取：
+        - 能读到 api_key/base_url → 用真 LLM则实际发 HTTP 请求。会耗 token。
+        - 读不到 / 错误 → 降级到 fake client（验证信号链路用）。
 
-        这样能验证：
-        1. WorkerThread 信号（chunk_received/response_complete/error_occurred）能正确桥到 QML
-        2. 流式 chunk 累积、节流、错误处理在真线程里工作
-        3. 取消/重入保护
+        读取逻辑：
+        1. _config.get_current_model() → {api_key, base_url, model_id, proxy, enable_thinking, enable_tools}
+        2. api_key 非空 → 生成真 client（会发出去）
+        3. 否则 → fake
         """
-        # Day 3-5 阶段：默认用 fake client（不烧 token / 不依赖真 API）
-        # Day 6+ 接真 client 时把下面这行换成 config.make_openai_client(...)
-        client = _make_fake_openai_client(user_text)
+        client = None
+        model_name = "未选择"
+        # Day 9+: use_fake=True 时跳过真 LLM（单元测试用，不烧 token）
+        if use_fake:
+            client = _make_fake_openai_client(user_text)
+            self._last_model_name = "(fake)"
+        else:
+            try:
+                current_model = _config.get_current_model()
+                if current_model and current_model.get("api_key"):
+                    model_name = current_model.get("name") or current_model.get("model_id", "?")
+                    client = _config.make_openai_client(
+                        current_model.get("api_key", ""),
+                        current_model.get("base_url", ""),
+                        current_model.get("proxy", ""),
+                    )
+                    self._last_model_name = model_name
+            except Exception as e:
+                print(f"[chat_bridge] 读取 config 失败: {e}，降级到 fake client")
+
+        if client is None:
+            client = _make_fake_openai_client(user_text)
+            self._last_model_name = "(fake)"
+
+        # 注意：use_fake=True 分支已经在上面设过 _last_model_name，
+        # 真 LLM 分支也在 try 块设过，这里只覆盖"真解析失败 fallback 到 fake"的分支
 
         # 真启动 WorkerThread（用空 messages 列表让 worker 不报错）
         self._worker = WorkerThread(

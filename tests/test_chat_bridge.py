@@ -70,7 +70,7 @@ class TestStopChat(unittest.TestCase):
     def test_stop_after_natural_completion(self):
         """\u5de5\u4f5c\u81ea\u7136\u5b8c\u6210\u540e\u8c03 stop_chat \u4e0d\u62a5\u9519"""
         b = ChatBridge(theme="light")
-        b.start_real_chat("hello")
+        b.start_real_chat("hello", use_fake=True)
         _pump(2000)  # \u7b49\u5de5\u4f5c\u5b8c\u6210\uff08fake client \u4e00\u6b21\u6027 emit \u5b8c\uff09
         b.stop_chat()  # worker \u5df2\u9000\u51fa\uff0c\u4e0d\u62a5\u9519
         self.assertFalse(b.isBusy)
@@ -78,7 +78,7 @@ class TestStopChat(unittest.TestCase):
     def test_multiple_stop_calls_safe(self):
         """\u591a\u6b21\u8c03\u7528 stop_chat \u4e0d\u62a5\u9519\uff08\u9632\u6b62\u91cd\u590d\u70b9\u51fb\u9519\u8bef\uff09"""
         b = ChatBridge(theme="light")
-        b.start_real_chat("hello")
+        b.start_real_chat("hello", use_fake=True)
         b.stop_chat()
         b.stop_chat()  # \u7b2c\u4e8c\u6b21\u4e3a noop
         b.stop_chat()
@@ -92,7 +92,7 @@ class TestStopChat(unittest.TestCase):
         replace_calls = []
         b.finalizeLast.connect(lambda who: finalize_calls.append(who))
         b.messageReplaced.connect(lambda who, text: replace_calls.append(who))
-        b.start_real_chat("hello")
+        b.start_real_chat("hello", use_fake=True)
         b.stop_chat()  # \u7acb\u5373\u8c03\u7528\uff08worker \u8fd8\u5728\u8dd1 fake \u751f\u6210\u5668\uff09
         _pump(1500)  # \u7b49 worker \u9000\u51fa
         # stop_chat \u672c\u8eab\u4f1a\u89e6\u53d1 finalizeLast + messageReplaced\uff08\u8be5 worker \u6ca1\u8d70\u5230 complete\uff09
