@@ -181,6 +181,30 @@ ApplicationWindow {
         }
     }
 
+    // ============ Day 12: 全局快捷键 ============
+    Shortcut {
+        sequence: "Esc"
+        enabled: bridge !== undefined && bridge !== null && bridge.isBusy
+        onActivated: if (bridge) bridge.stop_chat()
+    }
+    Shortcut {
+        sequence: "Ctrl+L"
+        onActivated: messageModel.clear()
+    }
+    Shortcut {
+        sequence: "Ctrl+T"
+        onActivated: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
+    }
+    Shortcut {
+        sequence: "Ctrl+N"
+        onActivated: if (bridge) bridge.create_session("新对话")
+    }
+    Shortcut {
+        sequence: "Ctrl+K"
+        enabled: bridge !== undefined && bridge !== null && bridge.isBusy
+        onActivated: if (bridge) bridge.stop_chat()
+    }
+
     // 根布局
     RowLayout {
         anchors.fill: parent
@@ -485,6 +509,16 @@ ApplicationWindow {
                             color: inputField.activeFocus ? root.pal.inputBgFocus : root.pal.inputBg
                             border.color: inputField.activeFocus ? root.pal.inputBorderFocus : root.pal.inputBorder
                             border.width: 1
+                            // Day 12: 拖拽文件支持（文件路径填入输入框）
+                            DropArea {
+                                anchors.fill: parent
+                                onDropped: {
+                                    if (drop.hasUrls && drop.urls.length > 0) {
+                                        const filePath = drop.urls[0].toString().replace("file:///", "")
+                                        inputField.text += (inputField.text ? "\n" : "") + filePath
+                                    }
+                                }
+                            }
                             Rectangle {
                                 anchors.fill: parent
                                 anchors.margins: -3

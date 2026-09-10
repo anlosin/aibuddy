@@ -35,6 +35,9 @@ class ChatBridge(QObject):
     sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
     sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
     currentModelNameChanged = pyqtSignal(str)                   # Day 10: 切换模型名名发生变化
+    # Day 11: 工具调用
+    toolCallStarted = pyqtSignal(str, str)                       # (工具名, 参数JSON)
+    toolCallResult = pyqtSignal(str, str, str)                   # (工具名, 参数, 结果)
 
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
@@ -340,6 +343,9 @@ class ChatBridge(QObject):
         self._worker.chunk_received.connect(self._on_worker_chunk)
         self._worker.response_complete.connect(self._on_worker_complete)
         self._worker.error_occurred.connect(self._on_worker_error)
+        # Day 11: 工具调用桥接
+        self._worker.tool_call_start.connect(self._on_worker_tool_call_start)
+        self._worker.tool_call_result.connect(self._on_worker_tool_call_result)
         # 线程 finished 也清 busy
         self._worker.finished.connect(self._on_worker_finished)
         # 启动
@@ -398,6 +404,40 @@ class ChatBridge(QObject):
         """QThread.finished 兜底：万一 signal 漏了，确保清 busy"""
         self._set_busy(False)
         self._worker = None
+
+    # ============ Day 11: 工具调用信号桥接 ============
+    def _on_worker_tool_call_start(self, name: str, args_str: str):
+        """WorkerThread.tool_call_start → QML 显示工具调用气泡
+
+        实现方式：往 messageModel append 一个 who="tool_call" 的条目，
+        QML delegate 看到这种类型会渲染成折叠卡片样式。
+        同时 emit toolCallStarted 给 QML 端可能要做的特殊处理。
+        """
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%H:%M")
+        # 解析 args（如果有的话）
+        args_display = args_str
+        try:
+            import json as _json
+            args_obj = _json.loads(args_str) if args_str else {}
+            args_display = _json.dumps(args_obj, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        # 推到 messageModel（who="tool_call"，text=name，code=args，hasCode=true）
+        self.messageAdded.emit("tool_call", name, ts, True, args_display)
+        self.toolCallStarted.emit(name, args_str)
+
+    def _on_worker_tool_call_result(self, name: str, args_str: str, result: str):
+        """WorkerThread.tool_call_result → QML 显示工具结果气泡
+
+        推到 messageModel（who="tool_result"，text=name，code=result）
+        """
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%H:%M")
+        # 截断过长结果（避免气泡爆长）
+        result_display = result if len(result) <= 800 else (result[:800] + "\n... (已截断)")
+        self.messageAdded.emit("tool_result", name, ts, True, result_display)
+        self.toolCallResult.emit(name, args_str, result)
 
     # ============ Day 1-2 兼容：旧 mock 路径（保留但默认不用）============
     def _simulate_ai_reply(self, prompt: str):

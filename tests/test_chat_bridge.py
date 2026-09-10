@@ -367,5 +367,72 @@ class TestModelSwitching(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class TestToolCallBridge(unittest.TestCase):
+    """Day 11: 工具调用桥接（worker.tool_call_start/result → QML messageAdded）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def setUp(self):
+        self.bridge = ChatBridge(theme="light")
+        self.created_ids = []
+        # 跟踪 messageAdded
+        self.messages = []
+        self.bridge.messageAdded.connect(
+            lambda who, text, ts, has_code, code: self.messages.append({
+                "who": who, "text": text, "ts": ts, "has_code": has_code, "code": code
+            })
+        )
+        # 跟踪 tool_call signals
+        self.tool_started = []
+        self.tool_result = []
+        self.bridge.toolCallStarted.connect(lambda n, a: self.tool_started.append((n, a)))
+        self.bridge.toolCallResult.connect(lambda n, a, r: self.tool_result.append((n, a, r)))
+
+    def tearDown(self):
+        for cid in self.created_ids:
+            try:
+                self.bridge.delete_session(cid)
+            except Exception:
+                pass
+
+    def test_tool_call_start_adds_to_message_model(self):
+        """tool_call_start 应该 emit messageAdded(who="tool_call") + toolCallStarted"""
+        self.bridge._on_worker_tool_call_start("get_weather", '{"city":"上海"}')
+        self.assertEqual(len(self.messages), 1)
+        msg = self.messages[0]
+        self.assertEqual(msg["who"], "tool_call")
+        self.assertEqual(msg["text"], "get_weather")
+        self.assertTrue(msg["has_code"])
+        self.assertIn("上海", msg["code"])  # args JSON 解析后含 city
+        self.assertEqual(len(self.tool_started), 1)
+
+    def test_tool_call_start_invalid_json_keeps_raw(self):
+        """参数不是 JSON 时保留原文"""
+        self.bridge._on_worker_tool_call_start("bad_tool", "{invalid json")
+        msg = self.messages[0]
+        self.assertEqual(msg["code"], "{invalid json")
+
+    def test_tool_call_result_adds_to_message_model(self):
+        """tool_call_result 应该 emit messageAdded(who="tool_result") + toolCallResult"""
+        result = "上海：晴 18°C"
+        self.bridge._on_worker_tool_call_result("get_weather", "{}", result)
+        self.assertEqual(len(self.messages), 1)
+        msg = self.messages[0]
+        self.assertEqual(msg["who"], "tool_result")
+        self.assertEqual(msg["text"], "get_weather")
+        self.assertEqual(msg["code"], result)
+        self.assertEqual(len(self.tool_result), 1)
+
+    def test_long_tool_result_truncated(self):
+        """超长工具结果截断到 800 字 + 省略号"""
+        long_result = "x" * 1000
+        self.bridge._on_worker_tool_call_result("big_tool", "{}", long_result)
+        msg = self.messages[0]
+        self.assertLess(len(msg["code"]), 850)
+        self.assertIn("已截断", msg["code"])
+
+
 if __name__ == "__main__":
     unittest.main()

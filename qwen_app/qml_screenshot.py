@@ -68,6 +68,40 @@ def render_day12(repo, app, engine, bridge):
     app.exec_()
 
 
+def render_day11(repo, app, engine, bridge):
+    """Day 11: 工具调用 UI 演示 — 直接 emit messageAdded 模拟 worker.tool_call_start/result"""
+    out_path = os.path.join(repo, "preview_qtquick_day11.png")
+    print(f"Day 11 截图（工具调用）: {out_path}")
+
+    def step1_seed_user():
+        # 1) 用户消息
+        bridge.messageAdded.emit("user", "帮我查一下天气", "10:30", False, "")
+
+    def step2_seed_tool_call():
+        # 2) 工具调用（chat_bridge._on_worker_tool_call_start 的逻辑）
+        bridge._on_worker_tool_call_start("get_weather", '{"city": "上海", "unit": "celsius"}')
+
+    def step3_seed_tool_result():
+        # 3) 工具结果
+        result = "上海当前天气：晴，气温 18°C，湿度 45%，东南风 3 级。空气质量指数 AQI=65（良）。"
+        bridge._on_worker_tool_call_result("get_weather", '{"city": "上海"}', result)
+
+    def step4_seed_ai():
+        # 4) AI 总结回答
+        bridge.messageAdded.emit("ai", "", "10:31", False, "")
+        bridge.messageAdded.emit("ai", "上海今天是晴天，气温 18°C，空气质量良好，适合户外活动。", "10:31", False, "")
+
+    def step5_grab():
+        _grab_to_file(engine, app, out_path, "day11")
+
+    QTimer.singleShot(1500, step1_seed_user)
+    QTimer.singleShot(2000, step2_seed_tool_call)
+    QTimer.singleShot(2500, step3_seed_tool_result)
+    QTimer.singleShot(3000, step4_seed_ai)
+    QTimer.singleShot(4500, step5_grab)
+    app.exec_()
+
+
 def main():
     if "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -75,6 +109,7 @@ def main():
     from .chat_bridge import ChatBridge
 
     want_day12 = "day12" in sys.argv
+    want_day11 = "day11" in sys.argv
     app = QGuiApplication(sys.argv)
     engine = QQmlApplicationEngine()
     engine.warnings.connect(
@@ -103,7 +138,9 @@ def main():
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     if want_day12:
-        render_day12(repo, app, engine,bridge)
+        render_day12(repo, app, engine, bridge)
+    elif want_day11:
+        render_day11(repo, app, engine, bridge)
     else:
         render_static_themes(repo, app, engine,bridge)
 

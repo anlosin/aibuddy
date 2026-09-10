@@ -2,27 +2,40 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
-// 消息气泡组件 — 含头像、正文、代码段
+// 消息气泡组件 — 支持 user / ai / tool_call / tool_result 四种类型
 Rectangle {
     id: bubble
-    property string who: "ai"          // "user" | "ai"
+    property string who: "ai"          // "user" | "ai" | "tool_call" | "tool_result"
     property string text: ""
     property bool hasCode: false
     property string code: ""
 
-    readonly property color fillColor: who === "user" ? "#4F8AF7" : "#FFFFFF"
-    readonly property color borderColor: who === "user" ? "transparent" : "#E5E7EB"
-    readonly property color textColor: who === "user" ? "#FFFFFF" : "#1F1F1F"
-    readonly property color codeBg: who === "user" ? Qt.rgba(1, 1, 1, 0.18) : "#F2F3F5"
-    readonly property color codeFg: who === "user" ? "#FFFFFF" : "#1F1F1F"
-    readonly property color avatarBg: who === "user" ? "#23B36B" : "#4E6EF2"
-    readonly property string avatarIcon: who === "user" ? "🧑" : "🤖"
+    readonly property bool isUser: who === "user"
+    readonly property bool isToolCall: who === "tool_call"
+    readonly property bool isToolResult: who === "tool_result"
+    readonly property bool isTool: isToolCall || isToolResult
+
+    readonly property color fillColor: isUser
+        ? "#4F8AF7"
+        : (isToolCall ? "#FFF7E6" : (isToolResult ? "#F0F9F4" : "#FFFFFF"))
+    readonly property color borderColor: isUser
+        ? "transparent"
+        : (isToolCall ? "#F5C36F" : (isToolResult ? "#7DC998" : "#E5E7EB"))
+    readonly property color textColor: isUser ? "#FFFFFF" : "#1F1F1F"
+    readonly property color codeBg: isUser ? Qt.rgba(1, 1, 1, 0.18) : "#F2F3F5"
+    readonly property color codeFg: isUser ? "#FFFFFF" : "#1F1F1F"
+    readonly property color avatarBg: isUser
+        ? "#23B36B"
+        : (isToolCall ? "#F5A623" : (isToolResult ? "#23B36B" : "#4E6EF2"))
+    readonly property string avatarIcon: isUser
+        ? "\ud83e\uddd1"
+        : (isToolCall ? "\ud83d\udd27" : (isToolResult ? "\ud83d\udcca" : "\ud83e\udd16"))
     readonly property int radiusVal: 16
 
     color: fillColor
     radius: radiusVal
     border.color: borderColor
-    border.width: who === "user" ? 0 : 1
+    border.width: isUser ? 0 : 1
     implicitWidth: contentRow.implicitWidth + 28
     implicitHeight: contentRow.implicitHeight + 24
 
@@ -36,7 +49,7 @@ Rectangle {
         z: -1
         radius: bubble.radiusVal + 1
         color: "transparent"
-        border.color: bubble.who === "user"
+        border.color: bubble.isUser
             ? Qt.rgba(0.31, 0.54, 0.95, 0.18)
             : Qt.rgba(0, 0, 0, 0.08)
         border.width: 1
@@ -48,7 +61,7 @@ Rectangle {
         anchors.margins: 12
         spacing: 10
 
-        // 头像（用户/AI 都显示）
+        // 头像
         Rectangle {
             Layout.preferredWidth: 32
             Layout.preferredHeight: 32
@@ -61,37 +74,39 @@ Rectangle {
             }
         }
 
-        // 文本列（正文 + 可选代码段）
+        // 文本列
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 8
+            // 标题（工具名 / 角色）
             Text {
                 visible: bubble.text.length > 0
                 text: bubble.text
-                color:bubble.textColor
-                font.pixelSize: 15
+                color: bubble.textColor
+                font.pixelSize: bubble.isTool ? 14 : 15
                 font.family: "Microsoft YaHei"
+                font.bold: bubble.isTool
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                textFormat: Text.RichText
+                textFormat: bubble.isTool ? Text.PlainText : Text.RichText
             }
-            // 代码段
+            // 参数 / 结果（code 字段）
             Rectangle {
                 visible: bubble.hasCode
                 Layout.fillWidth: true
                 radius: 8
-                color:bubble.codeBg
+                color: bubble.codeBg
                 implicitHeight: codeText.implicitHeight + 16
                 Text {
                     id: codeText
                     anchors.fill: parent
                     anchors.margins: 8
                     text: bubble.code
-                    color:bubble.codeFg
-                    font.family: "Consolas, Courier New, monospace"
-                    font.pixelSize: 13
+                    color: bubble.codeFg
+                    font.family: bubble.isTool ? "Consolas, Courier New, monospace" : "Microsoft YaHei"
+                    font.pixelSize: bubble.isTool ? 12 : 13
                     wrapMode: Text.Wrap
-                    textFormat: Text.RichText
+                    textFormat: Text.PlainText
                 }
             }
         }
