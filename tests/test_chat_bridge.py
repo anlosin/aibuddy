@@ -101,5 +101,109 @@ class TestStopChat(unittest.TestCase):
         # 空 buf 时 _flush_stream_buffer 跳过 emit messageReplaced（合理：没流过内容就没东西渲染）
 
 
+class TestSessionManagement(unittest.TestCase):
+    """Day 8: 会话管理（list / create / delete / load）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def setUp(self):
+        self.bridge = ChatBridge(theme="light")
+        self.created_ids = []  # 测试结束清理
+
+    def tearDown(self):
+        # 清理测试创建的会话
+        for cid in self.created_ids:
+            try:
+                self.bridge.delete_session(cid)
+            except Exception:
+                pass
+
+    def test_list_sessions_returns_qvariantlist(self):
+        """list_sessions 应返回 list[dict]，每个 dict 包含 id/name/time/sel"""
+        sessions = self.bridge.list_sessions()
+        self.assertIsInstance(sessions, list)
+        if sessions:  # 数据库可能空
+            s = sessions[0]
+            self.assertIn("id", s)
+            self.assertIn("name", s)
+            self.assertIn("time", s)
+            self.assertIn("sel", s)
+
+    def test_create_session_returns_id_and_persists(self):
+        """create_session 返回新 id，列表里能找到"""
+        new_id = self.bridge.create_session("Day 8 unit test")
+        self.created_ids.append(new_id)
+        self.assertTrue(new_id)
+        self.assertEqual(len(new_id), 8)  # uuid4 hex[:8]
+        # 重新查应该能找到
+        sessions = self.bridge.list_sessions()
+        ids = [s["id"] for s in sessions]
+        self.assertIn(new_id, ids)
+        # 找到的 session 应该有正确的 title
+        created = next(s for s in sessions if s["id"] == new_id)
+        self.assertEqual(created["name"], "Day 8 unit test")
+        self.assertTrue(created["sel"])  # 新创建的应该是当前会话
+
+    def test_create_emits_session_list_changed(self):
+        """create_session 应该 emit sessionListChanged"""
+        events = []
+        self.bridge.sessionListChanged.connect(lambda: events.append(1))
+        new_id = self.bridge.create_session("Day 8 emit test")
+        self.created_ids.append(new_id)
+        self.assertEqual(events, [1])
+
+    def test_delete_session_removes_it(self):
+        """delete_session 后列表里不再有"""
+        new_id = self.bridge.create_session("to delete")
+        self.created_ids  # 不放进 cleanup，避免双重删除
+        sessions_before = len(self.bridge.list_sessions())
+        self.bridge.delete_session(new_id)
+        sessions_after = len(self.bridge.list_sessions())
+        self.assertEqual(sessions_after, sessions_before - 1)
+        ids_after = [s["id"] for s in self.bridge.list_sessions()]
+        self.assertNotIn(new_id, ids_after)
+
+    def test_load_session_emits_history(self):
+        """load_session 应该 emit sessionLoaded(conv_id, history)"""
+        new_id = self.bridge.create_session("with history")
+        self.created_ids.append(new_id)
+        # 写一条历史（直接通过 config 模拟）
+        from qwen_app import config as _cfg
+        convs, _ = _cfg.load_conversations()
+        target = next(c for c in convs if c["id"] == new_id)
+        target["history"] = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        _cfg.save_single_conversation(target, new_id)
+        # 测试 load_session
+        captured = []
+        self.bridge.sessionLoaded.connect(lambda cid, hist: captured.append((cid, hist)))
+        self.bridge.load_session(new_id)
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][0], new_id)
+        self.assertEqual(len(captured[0][1]), 2)
+
+    def test_delete_current_session_falls_back(self):
+        """删除当前会话时应该回退到第一个（或 None）"""
+        # 创建 2 个会话
+        id_a = self.bridge.create_session("A")
+        id_b = self.bridge.create_session("B")
+        self.created_ids.extend([id_a, id_b])
+        # 当前会话是 B（后创建的）
+        # 删除 B 应该让 current 回退到 A
+        self.bridge.delete_session(id_b)
+        self.assertNotEqual(self.bridge._current_conv_id, id_b)
+
+    def test_load_nonexistent_session_is_noop(self):
+        """load 一个不存在的 id 应该 noop（不 emit）"""
+        captured = []
+        self.bridge.sessionLoaded.connect(lambda *a: captured.append(a))
+        self.bridge.load_session("nonexistent_id_xyz")
+        self.assertEqual(captured, [])
+
+
 if __name__ == "__main__":
     unittest.main()

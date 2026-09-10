@@ -87,14 +87,25 @@ ApplicationWindow {
         id: messageModel
     }
 
-    // 会话列表（仍用 mock，因为 Day 1-2 范围不含会话管理）
+    // Day 8: 会话列表（动态从 bridge.list_sessions() 填充）
     ListModel {
         id: convModel
-        ListElement { name: "Python 快速排序"; time: "10:01"; sel: true }
-        ListElement { name: "SQL 联表查询"; time: "09:30" }
-        ListElement { name: "Code Review: scheduler.py"; time: "昨天" }
-        ListElement { name: "Git 撤销 push"; time: "周一" }
-        ListElement { name: "PyQt5 vs QtQuick 调研"; time: "上周" }
+    }
+
+    // 重拉会话列表（bridge.sessionListChanged 触发）
+    function refreshConvList() {
+        convModel.clear()
+        if (!bridge) return
+        const sessions = bridge.list_sessions()
+        for (let i = 0; i < sessions.length; i++) {
+            const s = sessions[i]
+            convModel.append({
+                "convId": s.id,
+                "name": s.name,
+                "time": s.time,
+                "sel": s.sel
+            })
+        }
     }
 
     // ===== 监听 bridge的信号 → 推入messageModel =====
@@ -128,6 +139,30 @@ ApplicationWindow {
             const idx = messageModel.count - 1
             if (idx < 0) return
             messageModel.set(idx, { "text": newText })
+        }
+
+        // Day 8: 会话列表变化 -> 重拉
+        function onSessionListChanged() {
+            refreshConvList()
+        }
+        // Day 8: 会话加载完成 -> 重填 messageModel
+        function onSessionLoaded(convId, history) {
+            messageModel.clear()
+            if (!history) return
+            for (let i = 0; i < history.length; i++) {
+                const m = history[i]
+                // history item 格式: {role: 'user'|'assistant'|'system', content: '...'}
+                // 过滤 system，只显示 user + assistant
+                if (!m || m.role === 'system') continue
+                const who = (m.role === 'user') ? 'user' : 'ai'
+                messageModel.append({
+                    "who": who,
+                    "text": m.content || '',
+                    "ts": '',
+                    "hasCode": false,
+                    "code": ''
+                })
+            }
         }
         // 错误气泡
         function onAppendError(who, text) {
@@ -224,6 +259,7 @@ ApplicationWindow {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        onClicked: if (bridge) bridge.create_session("新对话")
                     }
                 }
 
@@ -299,6 +335,8 @@ ApplicationWindow {
                                     id: moreMa
                                     anchors.fill: parent
                                     hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (bridge) bridge.delete_session(model.convId)
                                 }
                             }
                         }
@@ -307,6 +345,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            onClicked: if (bridge) bridge.load_session(model.convId)
                         }
                     }
                 }

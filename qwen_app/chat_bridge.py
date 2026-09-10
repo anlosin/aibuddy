@@ -19,6 +19,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer
 
 from .worker import WorkerThread
 from .theme import markdown_to_html
+from . import config as _config
 
 
 class ChatBridge(QObject):
@@ -30,6 +31,9 @@ class ChatBridge(QObject):
     appendError = pyqtSignal(str, str)                      # who, text
     themeChanged = pyqtSignal(str)                          # "light" | "dark"
     messageReplaced = pyqtSignal(str, str)                  # who, rendered_html (Day 6)
+    # Day 8: 会话管理
+    sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
+    sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
 
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
@@ -52,6 +56,12 @@ class ChatBridge(QObject):
         # Day 6: 累积 buffer（按 who 维度），finalize 时用 markdown_to_html 渲染
         self._stream_buffers = {}
         self._worker = None  # Day 7: 在初始化时就设为 None（避免 stop_chat 报 AttributeError）
+        # Day 8: 会话状态（从 SQLite 加载当前 conv_id）
+        try:
+            _convs, _cur = _config.load_conversations()
+            self._current_conv_id = _cur
+        except Exception:
+            self._current_conv_id = None
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
@@ -106,6 +116,90 @@ class ChatBridge(QObject):
         # 等线程退出（最多 2s），防止主线程提前退出导致 Qt 报 "QThread: Destroyed while thread is still running"
         if self._worker.isRunning():
             self._worker.wait(2000)
+
+    # ============ Day 8: 会话管理 Slot ============
+    @pyqtSlot(result='QVariantList')
+    def list_sessions(self):
+        """返回会话列表 [{id, name, time, sel}, ...] - QML 调用填入侧边栏"""
+        try:
+            convs, current_id = _config.load_conversations()
+        except Exception:
+            return []
+        out = []
+        for c in convs:
+            out.append({
+                "id": c["id"],
+                "name": c.get("title") or "新对话",
+                "time": self._relative_time_str(c.get("created_at", "")),
+                "sel": c["id"] == (current_id or self._current_conv_id),
+            })
+        return out
+
+    @pyqtSlot(str, result=str)
+    def create_session(self, title="新对话"):
+        """创建新会话，返回新 id；同时设为当前会话"""
+        import uuid as _uuid
+        from datetime import datetime as _dt
+        new_conv = {
+            "id": str(_uuid.uuid4())[:8],
+            "title": title or "新对话",
+            "history": [],
+            "created_at": _dt.now().isoformat(),
+        }
+        _config.save_single_conversation(new_conv, new_conv["id"])
+        self._current_conv_id = new_conv["id"]
+        self.sessionListChanged.emit()
+        return new_conv["id"]
+
+    @pyqtSlot(str)
+    def delete_session(self, conv_id):
+        """删除会话；如果删的是当前会话则回退到第一个"""
+        try:
+            convs, current_id = _config.load_conversations()
+        except Exception:
+            return
+        convs = [c for c in convs if c["id"] != conv_id]
+        new_cur = current_id if current_id != conv_id else (convs[0]["id"] if convs else None)
+        _config.save_conversations(convs, new_cur)
+        if self._current_conv_id == conv_id:
+            self._current_conv_id = new_cur
+        self.sessionListChanged.emit()
+
+    @pyqtSlot(str)
+    def load_session(self, conv_id):
+        """加载会话历史 -> emit sessionLoaded(conv_id, history) -> QML 重填 messageModel"""
+        try:
+            convs, _ = _config.load_conversations()
+        except Exception:
+            return
+        conv = next((c for c in convs if c["id"] == conv_id), None)
+        if not conv:
+            return
+        self._current_conv_id = conv_id
+        # history 字段是 [{role: 'user'|'assistant'|'system', content: '...'}]
+        history = conv.get("history", []) or []
+        self.sessionLoaded.emit(conv_id, history)
+
+    @staticmethod
+    def _relative_time_str(iso_str):
+        """相对时间文本：今天 HH:MM / 昨天 / N 天前 / YYYY-MM-DD"""
+        if not iso_str:
+            return ""
+        try:
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(iso_str)
+            now = _dt.now()
+            diff = now - dt
+            if diff.days == 0:
+                return "今天 " + dt.strftime("%H:%M")
+            elif diff.days == 1:
+                return "昨天"
+            elif diff.days < 7:
+                return f"{diff.days} 天前"
+            else:
+                return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return iso_str[:10]
 
     # ============ 内部辅助 ============
     def _send_user_bubble(self, text: str):
