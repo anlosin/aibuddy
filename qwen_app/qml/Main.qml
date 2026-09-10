@@ -378,40 +378,29 @@ ApplicationWindow {
                         anchors.leftMargin: 20
                         anchors.rightMargin: 20
                         spacing: 12
-                        Rectangle {
+                        // Day 10: 模型下拉（从 bridge.list_models() 动态填）
+                        ComboBox {
+                            id: modelCombo
                             Layout.preferredHeight: 32
                             Layout.preferredWidth: 200
-                            radius: 8
-                            color: modelMa.containsMouse ? root.pal.sidebarHover : "transparent"
-                            border.color: root.pal.inputBorder
-                            border.width: 1
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
-                                spacing: 6
-                                Text {
-                                    text: "🤖"
-                                    font.pixelSize: 14
+                            model: bridge ? bridge.list_models() : []
+                            // 只显示 name 字段
+                            textRole: "name"
+                            // \u9009\u4e2d\u9879\u7d22\u5f15\uff08\u542b current=true \u7684\uff09
+                            currentIndex: {
+                                if (!bridge) return -1
+                                const ms = bridge.list_models()
+                                for (let i = 0; i < ms.length; i++) {
+                                    if (ms[i].current) return i
                                 }
-                                Text {
-                                    text: "Qwen-Max (mock)"
-                                    color: root.pal.textPrimary
-                                    font.pixelSize: 13
-                                    font.bold: true
-                                    Layout.fillWidth: true
-                                }
-                                Text {
-                                    text: "▾"
-                                    color: root.pal.textTertiary
-                                    font.pixelSize: 10
-                                }
+                                return ms.length > 0 ? 0 : -1
                             }
-                            MouseArea {
-                                id: modelMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
+                            onActivated: {
+                                if (!bridge) return
+                                const ms = bridge.list_models()
+                                if (currentIndex >= 0 && currentIndex < ms.length) {
+                                    bridge.set_current_model(ms[currentIndex].id)
+                                }
                             }
                         }
                         Item { Layout.fillWidth: true }

@@ -34,6 +34,7 @@ class ChatBridge(QObject):
     # Day 8: 会话管理
     sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
     sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
+    currentModelNameChanged = pyqtSignal(str)                   # Day 10: 切换模型名名发生变化
 
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
@@ -73,11 +74,11 @@ class ChatBridge(QObject):
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
-    def send_message(self, text: str):
+    def send_message(self, text: str, use_fake: bool = False):
         """QML 触发用户发送一条消息。
 
         Day 3-5 起默认走 real 路径（fake OpenAI client + 真 WorkerThread）。
-        留 _use_mock 槽位便于 Day 1-2 验证。
+        Day 10: use_fake=True 时跳过真 LLM（截图/单元测试用，不烧 token）。
         """
         if not text or not text.strip():
             return
@@ -86,7 +87,7 @@ class ChatBridge(QObject):
             self.appendError.emit("system", "正在生成中，请稍候")
             return
         self._send_user_bubble(text.strip())
-        self.start_real_chat(text.strip())
+        self.start_real_chat(text.strip(), use_fake=use_fake)
 
     @pyqtSlot(str)
     def send_message_mock(self, text: str):
@@ -209,10 +210,80 @@ class ChatBridge(QObject):
         except Exception:
             return iso_str[:10]
 
+    # ============ Day 10: 模型切换 Slot ============
+    @pyqtSlot(result='QVariantList')
+    def list_models(self):
+        """Day 10: 返回可选模型列表 [{id, name, current}, ...]"""
+        try:
+            models, current_id = _config.load_models()
+        except Exception:
+            return []
+        out = []
+        for m in models:
+            out.append({
+                "id": m.get("id", ""),
+                "name": m.get("name") or m.get("model_id") or "?",
+                "current": m.get("id") == current_id,
+            })
+        return out
+
+    @pyqtSlot(str, result=bool)
+    def set_current_model(self, model_id: str) -> bool:
+        """Day 10: 切换当前模型。成功返回 True。"""
+        if not model_id:
+            return False
+        try:
+            models, _ = _config.load_models()
+            if not any(m.get("id") == model_id for m in models):
+                return False
+            _config.save_models(models, model_id)
+            # 刷新 _last_model_name，后续 start_real_chat 会用新模型
+            new_model = next((m for m in models if m.get("id") == model_id), None)
+            if new_model:
+                self._last_model_name = new_model.get("name") or new_model.get("model_id", "?")
+                self.currentModelNameChanged.emit(self._last_model_name)
+            return True
+        except Exception as e:
+            print(f"[chat_bridge] set_current_model 失败: {e}")
+            return False
+
+    @pyqtSlot(result=str)
+    def get_current_model_name(self) -> str:
+        """Day 10: 返回当前模型名称（QML 顶栏显示用）"""
+        return self._last_model_name or "(未选择)"
+
     # ============ 内部辅助 ============
     def _send_user_bubble(self, text: str):
         ts = datetime.now().strftime("%H:%M")
         self.messageAdded.emit("user", text, ts, False, "")
+        # Day 10: 用户消息立即写到 SQLite（防止崩溃丢失）
+        self._append_history("user", text)
+
+    def _append_history(self, role: str, content: str):
+        """Day 10: 把消息 append 到当前会话 history + 写 SQLite
+
+        - user 消息: 立即保存
+        - assistant 消息: response_complete / stop / error 时由 _flush_stream_buffer 触发保存
+        - 标题自动从第一条 user message 取（前 30 字，"新对话" 时才覆盖）
+        """
+        if not self._current_conv_id:
+            return
+        if not content or not content.strip():
+            return
+        try:
+            convs, _ = _config.load_conversations()
+            conv = next((c for c in convs if c["id"] == self._current_conv_id), None)
+            if conv is None:
+                return
+            history = conv.get("history") or []
+            history.append({"role": role, "content": content})
+            conv["history"] = history
+            # 标题自动取首条 user 消息前 30 字（仅在"新对话"标题时）
+            if role == "user" and conv.get("title", "新对话") == "新对话":
+                conv["title"] = (content[:30] + ("..." if len(content) > 30 else "")).strip() or "新对话"
+            _config.save_single_conversation(conv, self._current_conv_id)
+        except Exception as e:
+            print(f"[chat_bridge] 保存历史失败: {e}")
 
 
     # ============ Day 3-5: 真实流式（用 fake OpenAI client 跑真 WorkerThread）============
@@ -300,10 +371,15 @@ class ChatBridge(QObject):
         self._last_who = None
 
     def _flush_stream_buffer(self, who: str):
-        """Day 6: 取 buffer → markdown_to_html → emit messageReplaced 让 QML 替换"""
+        """Day 6: 取 buffer → markdown_to_html → emit messageReplaced 让 QML 替换
+        Day 10: 同时把 assistant 消息写到 SQLite（response_complete / stop / error 三种收尾都走这里）
+        """
         buf = self._stream_buffers.pop(who, "")
         if not buf:
             return
+        # Day 10: assistant 消息保存到 SQLite（仅当 who == "ai"，避免错误气泡也保存）
+        if who == "ai":
+            self._append_history("assistant", buf)
         rendered = markdown_to_html(buf, self._theme)
         self.messageReplaced.emit(who, rendered)
 

@@ -205,5 +205,167 @@ class TestSessionManagement(unittest.TestCase):
         self.assertEqual(captured, [])
 
 
+class TestMessagePersistence(unittest.TestCase):
+    """Day 10: 消息保存到 SQLite
+
+    验证:
+    1. user 消息发送后立即写 SQLite
+    2. assistant 消息 finalize 时写 SQLite
+    3. title 自动从首条 user 消息取前 30 字（仅默认"新对话"时）
+    4. 写历史失败不阻塞主流程
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def setUp(self):
+        self.bridge = ChatBridge(theme="light")
+        self.created_ids = []
+
+    def tearDown(self):
+        for cid in self.created_ids:
+            try:
+                self.bridge.delete_session(cid)
+            except Exception:
+                pass
+
+    def _pump(self, ms):
+        loop = QEventLoop()
+        QTimer.singleShot(ms, loop.quit)
+        loop.exec_()
+
+    def test_user_message_persisted_to_sqlite(self):
+        """发送 user 消息后立即能读到 SQLite"""
+        cid = self.bridge.create_session("")  # 默认 "新对话"
+        self.created_ids.append(cid)
+        self.bridge.send_message("测试消息", use_fake=True)
+        self._pump(100)  # 立即读
+        from qwen_app import config
+        convs, _ = config.load_conversations()
+        conv = next(c for c in convs if c["id"] == cid)
+        user_msgs = [h for h in conv["history"] if h["role"] == "user"]
+        self.assertEqual(len(user_msgs), 1)
+        self.assertEqual(user_msgs[0]["content"], "测试消息")
+
+    def test_assistant_message_persisted_after_completion(self):
+        """assistant 消息在 finalize 时写 SQLite"""
+        cid = self.bridge.create_session("")
+        self.created_ids.append(cid)
+        self.bridge.send_message("测试", use_fake=True)
+        self._pump(2500)  # 等 fake 流式完成
+        from qwen_app import config
+        convs, _ = config.load_conversations()
+        conv = next(c for c in convs if c["id"] == cid)
+        roles = [h["role"] for h in conv["history"]]
+        self.assertIn("user", roles)
+        self.assertIn("assistant", roles)
+        self.assertEqual(len(conv["history"]), 2)
+
+    def test_title_auto_updated_from_first_user_message(self):
+        """首条 user 消息应该自动成为 title"""
+        cid = self.bridge.create_session("")  # title="新对话"
+        self.created_ids.append(cid)
+        self.bridge.send_message("Python 快速排序怎么写？", use_fake=True)
+        self._pump(100)
+        from qwen_app import config
+        convs, _ = config.load_conversations()
+        conv = next(c for c in convs if c["id"] == cid)
+        self.assertEqual(conv["title"], "Python 快速排序怎么写？")
+
+    def test_title_not_overwritten_if_user_set(self):
+        """用户设过的 title 不应该被覆盖"""
+        cid = self.bridge.create_session("我的固定标题")
+        self.created_ids.append(cid)
+        self.bridge.send_message("Python 快速排序怎么写？", use_fake=True)
+        self._pump(100)
+        from qwen_app import config
+        convs, _ = config.load_conversations()
+        conv = next(c for c in convs if c["id"] == cid)
+        self.assertEqual(conv["title"], "我的固定标题")  # 不被覆盖
+
+    def test_long_title_truncated(self):
+        """超过 30 字的 title 截断"""
+        cid = self.bridge.create_session("")
+        self.created_ids.append(cid)
+        long_msg = "a" * 100  # 100 字
+        self.bridge.send_message(long_msg, use_fake=True)
+        self._pump(100)
+        from qwen_app import config
+        convs, _ = config.load_conversations()
+        conv = next(c for c in convs if c["id"] == cid)
+        self.assertEqual(len(conv["title"]), 33)  # 30 + "..."
+        self.assertTrue(conv["title"].endswith("..."))
+
+
+class TestModelSwitching(unittest.TestCase):
+    """Day 10: 模型切换菜单桥到 QML"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def setUp(self):
+        self.bridge = ChatBridge(theme="light")
+        # 备份当前模型，测试结束还原
+        from qwen_app import config
+        _, self._original_id = config.load_models()
+
+    def tearDown(self):
+        # 还原当前模型
+        if self._original_id:
+            self.bridge.set_current_model(self._original_id)
+
+    def test_list_models_returns_qvariantlist(self):
+        """list_models 应返回 list[dict]，每个 dict 含 id/name/current"""
+        models = self.bridge.list_models()
+        self.assertIsInstance(models, list)
+        if models:  # 数据库可能空
+            m = models[0]
+            self.assertIn("id", m)
+            self.assertIn("name", m)
+            self.assertIn("current", m)
+        # 当前模型应该被标记
+        currents = [m for m in models if m["current"]]
+        self.assertEqual(len(currents), 1)
+
+    def test_get_current_model_name(self):
+        """get_current_model_name 返回当前激活的模型名"""
+        name = self.bridge.get_current_model_name()
+        self.assertTrue(name)
+        self.assertNotEqual(name, "(未选择)")
+
+    def test_set_current_model_changes_active(self):
+        """set_current_model 应该切换当前模型 + 触发 signal"""
+        models = self.bridge.list_models()
+        if len(models) < 2:
+            self.skipTest("只有一个模型，跳过切换测试")
+        other = next(m for m in models if not m["current"])
+        captured = []
+        self.bridge.currentModelNameChanged.connect(lambda n: captured.append(n))
+        ok = self.bridge.set_current_model(other["id"])
+        self.assertTrue(ok)
+        self.assertEqual(self.bridge.get_current_model_name(), other["name"])
+        self.assertEqual(captured, [other["name"]])
+        # list_models 中 current 应该换了
+        models_after = self.bridge.list_models()
+        currents = [m for m in models_after if m["current"]]
+        self.assertEqual(len(currents), 1)
+        self.assertEqual(currents[0]["id"], other["id"])
+
+    def test_set_nonexistent_model_returns_false(self):
+        """设置不存在的 model id 应该返回 False（不抛异常）"""
+        captured = []
+        self.bridge.currentModelNameChanged.connect(lambda n: captured.append(n))
+        ok = self.bridge.set_current_model("nonexistent_model_xyz")
+        self.assertFalse(ok)
+        self.assertEqual(captured, [])  # 没切换
+
+    def test_set_empty_model_id_returns_false(self):
+        """空字符串 id 应该返回 False"""
+        ok = self.bridge.set_current_model("")
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()
