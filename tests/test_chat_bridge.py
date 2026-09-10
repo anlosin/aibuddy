@@ -434,5 +434,72 @@ class TestToolCallBridge(unittest.TestCase):
         self.assertIn("已截断", msg["code"])
 
 
+class TestReadTextFile(unittest.TestCase):
+    """Day 13: 拖拽文本文件时自动读取内容附加"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def setUp(self):
+        self.bridge = ChatBridge(theme="light")
+        # 临时目录
+        import tempfile
+        self._tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        try:
+            shutil.rmtree(self._tmpdir)
+        except Exception:
+            pass
+
+    def test_read_python_file_returns_markdown(self):
+        """读 .py 文件返回 [文件: x.py] + 围栏代码块（python 标签）"""
+        path = os.path.join(self._tmpdir, "hello.py")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("def hello():\n    print('hi')\n")
+        result = self.bridge.read_text_file(path)
+        self.assertIn("hello.py", result)
+        self.assertIn("```python", result)
+        self.assertIn("def hello()", result)
+
+    def test_read_markdown_file_uses_markdown_lang(self):
+        """读 .md 文件用 markdown 标签"""
+        path = os.path.join(self._tmpdir, "doc.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Title\n")
+        result = self.bridge.read_text_file(path)
+        self.assertIn("```markdown", result)
+        self.assertIn("# Title", result)
+
+    def test_read_unknown_extension_uses_text_lang(self):
+        """未知扩展名用 text 标签"""
+        path = os.path.join(self._tmpdir, "data.xyz")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("hello")
+        result = self.bridge.read_text_file(path)
+        self.assertIn("```text", result)
+
+    def test_read_large_file_truncated(self):
+        """超大文件（>50KB）截断"""
+        path = os.path.join(self._tmpdir, "big.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("x" * 60000)  # 60KB
+        result = self.bridge.read_text_file(path)
+        self.assertIn("已截断", result)
+        self.assertIn("50KB", result)
+
+    def test_read_nonexistent_file_returns_error(self):
+        """不存在的文件返回错误提示"""
+        result = self.bridge.read_text_file("/nonexistent/path/file.txt")
+        self.assertIn("失败", result)
+
+    def test_read_empty_path_returns_empty(self):
+        """空路径返回空字符串"""
+        result = self.bridge.read_text_file("")
+        self.assertEqual(result, "")
+
+
 if __name__ == "__main__":
     unittest.main()

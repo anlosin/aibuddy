@@ -15,6 +15,7 @@ QML 端不需要知道走的是 mock 还是 real 路径，看到的都是：
 """
 from datetime import datetime
 from types import SimpleNamespace
+import os
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer
 
 from .worker import WorkerThread
@@ -255,7 +256,73 @@ class ChatBridge(QObject):
         """Day 10: 返回当前模型名称（QML 顶栏显示用）"""
         return self._last_model_name or "(未选择)"
 
+    @pyqtSlot(str, result=str)
+    def read_text_file(self, file_path: str) -> str:
+        """Day 13: 读文本文件内容（拖入文本文件时附加到输入框用）
+
+        返回格式: "[文件: 路径]\n```lang\n内容\n```"
+        - 限制 50KB（更大截断 + 提示）
+        - 只读文本类（按扩展名白名单 + try-except 兜底）
+        - 出错返回 "[读文件失败: ...]"
+        """
+        if not file_path:
+            return ""
+        # 文件大小检查（50KB 限制）
+        MAX_SIZE = 50 * 1024
+        try:
+            size = os.path.getsize(file_path)
+        except Exception as e:
+            return f"[读文件失败: {e}]"
+        if size > MAX_SIZE:
+            truncated_msg = f"(文件过大，已截断到 {MAX_SIZE // 1024}KB)"
+        else:
+            truncated_msg = None
+        # 按扩展名选语言标签
+        lower = file_path.lower()
+        lang = "text"
+        for ext, l in ((".py", "python"), (".js", "javascript"), (".ts", "typescript"),
+                        (".json", "json"), (".md", "markdown"), (".html", "html"),
+                        (".css", "css"), (".sh", "bash"), (".yml", "yaml"),
+                        (".yaml", "yaml"), (".xml", "xml"), (".sql", "sql"),
+                        (".java", "java"), (".go", "go"), (".rs", "rust"),
+                        (".cpp", "cpp"), (".c", "c"), (".h", "c")):
+            if lower.endswith(ext):
+                lang = l
+                break
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(MAX_SIZE)
+        except Exception as e:
+            return f"[读文件失败: {e}]"
+        file_name = os.path.basename(file_path)
+        out = f"[文件: {file_name}]\n```{lang}\n{content}\n```"
+        if truncated_msg:
+            out += f"\n{truncated_msg}"
+        return out
+
     # ============ 内部辅助 ============
+    def _discover_plugins(self) -> dict:
+        """Day 13: 扫描 plugins 目录（plugin_manager.discover_plugins）"""
+        try:
+            from . import plugin_manager
+            plugins, _ = plugin_manager.discover_plugins()
+            return plugins
+        except Exception as e:
+            print(f"[chat_bridge] discover_plugins 失败: {e}")
+            return {}
+
+    def _enabled_plugin_names(self) -> list:
+        """Day 13: 列出已启用插件名（带 TOOLS 字段的）
+
+        简化版：所有定义了 TOOLS 的插件都视为启用（PyQt5 主线从 settings 读）。
+        """
+        try:
+            from . import plugin_manager
+            plugins, _ = plugin_manager.discover_plugins()
+            return [n for n, m in plugins.items() if hasattr(m, "TOOLS") and m.TOOLS]
+        except Exception:
+            return []
+
     def _send_user_bubble(self, text: str):
         ts = datetime.now().strftime("%H:%M")
         self.messageAdded.emit("user", text, ts, False, "")
@@ -332,11 +399,11 @@ class ChatBridge(QObject):
             client=client,
             model_id="mock-qwen",
             enable_thinking=False,
-            enable_tools=False,
+            enable_tools=True,           # Day 13: 启用工具调用
             messages=[{"role": "user", "content": user_text}],
-            plugins={},
-            enabled_plugins=[],
-            max_rounds=1,
+            plugins=self._discover_plugins(),
+            enabled_plugins=self._enabled_plugin_names(),
+            max_rounds=3,                 # 最多 3 轮工具调用循环
             workspace=None,
         )
         # 桥接 worker 信号 → bridge 信号（再由 bridge 触发 QML）

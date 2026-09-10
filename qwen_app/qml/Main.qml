@@ -82,6 +82,11 @@ ApplicationWindow {
         }
     })[themeName]
 
+    // Day 13: 主题切换全局颜色过渡动画
+    Behavior on color {
+        ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+    }
+
     // ===== 消息列表（动态，bridge 信号驱动）=====
     ListModel {
         id: messageModel
@@ -501,6 +506,63 @@ ApplicationWindow {
                         anchors.margins: 16
                         spacing: 10
 
+                        // Day 13: 附件预览行（图片缩略图，仅有附件时显示）
+                        Rectangle {
+                            visible: fileDrop.attachments.length > 0
+                            Layout.preferredHeight: 64
+                            Layout.fillWidth: true
+                            color: root.pal.sidebarHover
+                            radius: 10
+                            border.color: root.pal.inputBorder
+                            border.width: 1
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 8
+                                Repeater {
+                                    model: fileDrop.attachments
+                                    delegate: Rectangle {
+                                        Layout.preferredWidth: 48
+                                        Layout.preferredHeight: 48
+                                        radius: 6
+                                        color: root.pal.sidebarBg
+                                        border.color: root.pal.sidebarBorder
+                                        border.width: 1
+                                        Image {
+                                            anchors.fill: parent
+                                            anchors.margins: 2
+                                            source: modelData.url
+                                            fillMode: Image.PreserveAspectCrop
+                                            asynchronous: true
+                                            cache: true
+                                        }
+                                        Rectangle {
+                                            anchors.top: parent.top
+                                            anchors.right: parent.right
+                                            anchors.margins: 1
+                                            width: 14; height: 14
+                                            radius: 7
+                                            color: "#E55656"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "✕"
+                                                color: "white"
+                                                font.pixelSize: 9
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                onClicked: {
+                                                    const arr = fileDrop.attachments.slice()
+                                                    arr.splice(index, 1)
+                                                    fileDrop.attachments = arr
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Rectangle {
                             id: inputBox
                             Layout.fillWidth: true
@@ -510,12 +572,40 @@ ApplicationWindow {
                             border.color: inputField.activeFocus ? root.pal.inputBorderFocus : root.pal.inputBorder
                             border.width: 1
                             // Day 12: 拖拽文件支持（文件路径填入输入框）
+                            // Day 13: 图片预览 + 文本文件内容自动附加
                             DropArea {
+                                id: fileDrop
                                 anchors.fill: parent
+                                property var attachments: []
                                 onDropped: {
                                     if (drop.hasUrls && drop.urls.length > 0) {
-                                        const filePath = drop.urls[0].toString().replace("file:///", "")
-                                        inputField.text += (inputField.text ? "\n" : "") + filePath
+                                        const fileUrl = drop.urls[0].toString()
+                                        const filePath = fileUrl.replace("file:///", "").replace("file://", "")
+                                        const lower = filePath.toLowerCase()
+                                        const isImage = lower.endsWith(".png") || lower.endsWith(".jpg")
+                                            || lower.endsWith(".jpeg") || lower.endsWith(".gif")
+                                            || lower.endsWith(".bmp") || lower.endsWith(".webp")
+                                        if (isImage) {
+                                            const newAtts = fileDrop.attachments.slice()
+                                            newAtts.push({path: filePath, url: fileUrl, name: filePath.split(/[\\\\\\/]/).pop()})
+                                            fileDrop.attachments = newAtts
+                                            inputField.text += (inputField.text ? "\n" : "") + "[\u56fe\u7247] " + filePath
+                                        } else if (bridge) {
+                                            const textExts = [".txt", ".md", ".py", ".js", ".ts", ".json", ".log",
+                                                               ".html", ".css", ".sh", ".yml", ".yaml", ".xml",
+                                                               ".sql", ".java", ".go", ".rs", ".cpp", ".c", ".h"]
+                                            const isText = textExts.some(function(e) { return lower.endsWith(e) })
+                                            if (isText) {
+                                                const content = bridge.read_text_file(filePath)
+                                                if (content) {
+                                                    inputField.text += (inputField.text ? "\n" : "") + content
+                                                } else {
+                                                    inputField.text += (inputField.text ? "\n" : "") + filePath
+                                                }
+                                            } else {
+                                                inputField.text += (inputField.text ? "\n" : "") + filePath
+                                            }
+                                        }
                                     }
                                 }
                             }
