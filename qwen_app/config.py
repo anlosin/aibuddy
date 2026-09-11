@@ -191,8 +191,16 @@ def load_conversations():
                 "created_at": r["created_at"],
             })
         # current_id 存为 pragma（单值，跨线程安全）
+        # Day 15: 读出时还原成 hex 字符串（存时是 int(hex_id, 16)）
         cur = db.execute("PRAGMA user_version").fetchone()
-        current_id = str(cur[0]) if cur and cur[0] else None
+        if cur and cur[0]:
+            # 与 save_single_conversation/save_conversations 一致：hex ID 存为整数
+            try:
+                current_id = hex(int(cur[0]))[2:]  # "0xabcd" -> "abcd"
+            except Exception:
+                current_id = None
+        else:
+            current_id = None
         # 如果 current_id 指向的对话已被删除，回退到第一个
         if current_id and not any(c["id"] == current_id for c in convs):
             current_id = convs[0]["id"] if convs else None

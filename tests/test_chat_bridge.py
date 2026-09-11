@@ -434,6 +434,45 @@ class TestToolCallBridge(unittest.TestCase):
         self.assertIn("已截断", msg["code"])
 
 
+class TestPluginReload(unittest.TestCase):
+    """Day 15: 插件热更新 + toolCallInProgress 修复回归"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def setUp(self):
+        self.bridge = ChatBridge(theme="light")
+        self.reload_events = []
+        self.bridge.pluginReloaded.connect(lambda n: self.reload_events.append(n))
+        self.tool_events = []
+        self.bridge.toolCallInProgressChanged.connect(
+            lambda in_prog, name: self.tool_events.append((in_prog, name))
+        )
+
+    def test_plugin_reloaded_signal_declared(self):
+        """Day 15: pluginReloaded 信号必须存在（之前未声明）"""
+        self.assertTrue(hasattr(self.bridge, "pluginReloaded"))
+
+    def test_tool_call_in_progress_initial_false(self):
+        """Day 15: toolCallInProgress 初始 False（之前硬编码）"""
+        self.assertFalse(self.bridge.toolCallInProgress)
+        self.assertEqual(self.bridge.currentToolName, "")
+
+    def test_tool_call_in_progress_changes_on_set(self):
+        """Day 15: _set_tool_call_in_progress(True, 'calc') 应改属性 + emit"""
+        self.bridge._set_tool_call_in_progress(True, "calculator")
+        self.assertTrue(self.bridge.toolCallInProgress)
+        self.assertEqual(self.bridge.currentToolName, "calculator")
+        self.assertEqual(self.tool_events, [(True, "calculator")])
+
+    def test_tool_call_in_progress_dedup(self):
+        """Day 15: 同状态不重复 emit"""
+        self.bridge._set_tool_call_in_progress(True, "calc")
+        self.bridge._set_tool_call_in_progress(True, "calc")
+        self.assertEqual(len(self.tool_events), 1)
+
+
 class TestReadTextFile(unittest.TestCase):
     """Day 13: 拖拽文本文件时自动读取内容附加"""
 

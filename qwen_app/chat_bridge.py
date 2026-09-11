@@ -43,6 +43,7 @@ class ChatBridge(QObject):
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
     toolCallInProgressChanged = pyqtSignal(bool, str)        # Day 14: 工具调用进度
+    pluginReloaded = pyqtSignal(int)                        # Day 14: 插件热更新事件（参数=插件数）
 
     def _get_busy(self) -> bool:
         return self._is_busy
@@ -55,9 +56,17 @@ class ChatBridge(QObject):
     isBusy = pyqtProperty(bool, _get_busy, _set_busy, notify=busyChanged)
 
     def _get_tool_in_progress(self) -> bool:
-        return False
+        return getattr(self, "_is_tool_in_progress", False)
     def _get_current_tool_name(self) -> str:
-        return ""
+        return getattr(self, "_current_tool_name", "")
+    def _set_tool_call_in_progress(self, in_progress: bool, name: str = ""):
+        """Day 14: 设工具调用进度（QML 顶栏显示"正在调用工具"）"""
+        prev = getattr(self, "_is_tool_in_progress", False)
+        prev_name = getattr(self, "_current_tool_name", "")
+        if in_progress != prev or name != prev_name:
+            self._is_tool_in_progress = in_progress
+            self._current_tool_name = name
+            self.toolCallInProgressChanged.emit(in_progress, name)
     toolCallInProgress = pyqtProperty(bool, _get_tool_in_progress, notify=toolCallInProgressChanged)
     currentToolName = pyqtProperty(str, _get_current_tool_name, notify=toolCallInProgressChanged)
 
@@ -105,27 +114,14 @@ class ChatBridge(QObject):
 
     def _on_plugin_dir_changed(self, path):
         """Day 14: 插件目录变化时触发热重载（防抖 300ms）"""
-        if hasattr(self, "_plugin_reload_timer") and self._plugin_reload_timer.isActive():
-            self._plugin_reload_timer.stop()
-        else:
+        # Day 15: 复用 timer（避免频繁创建）
+        if not hasattr(self, "_plugin_reload_timer") or self._plugin_reload_timer is None:
             self._plugin_reload_timer = QTimer()
             self._plugin_reload_timer.setSingleShot(True)
             self._plugin_reload_timer.timeout.connect(self.reload_plugins)
+        else:
+            self._plugin_reload_timer.stop()
         self._plugin_reload_timer.start(300)
-        # Day 8: 会话状态（从 SQLite 加载当前 conv_id）
-        try:
-            _convs, _cur = _config.load_conversations()
-            self._current_conv_id = _cur
-        except Exception:
-            self._current_conv_id = None
-        self._last_model_name = "(none)"  # Day 9: 最后使用的模型名（错误提示用）
-        # Day 9: 启动时立即从 config 读当前模型名（QML 顶栏要显示）
-        try:
-            _m = _config.get_current_model()
-            if _m:
-                self._last_model_name = _m.get("name") or _m.get("model_id", "?")
-        except Exception:
-            pass
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
@@ -201,9 +197,11 @@ class ChatBridge(QObject):
             self._flush_stream_buffer(self._last_who)
             self.finalizeLast.emit(self._last_who)
             self._last_who = None
-        # 等线程退出（最多 2s），防止主线程提前退出导致 Qt 报 "QThread: Destroyed while thread is still running"
-        if self._worker.isRunning():
-            self._worker.wait(2000)
+        # 等线程退出（最多 200ms — 太久会冻 UI，太短 worker 来不及清理）
+        # Day 14: stop 后流的最后 chunk 会触发 _on_worker_complete → _set_busy(False)
+        # 这边只兜底等一下，不强制清 busy（避免双重清理）
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.wait(200)
 
     # ============ Day 8: 会话管理 Slot ============
     @pyqtSlot(result='QVariantList')
@@ -555,9 +553,14 @@ class ChatBridge(QObject):
             self._last_who = None
 
     def _on_worker_finished(self):
-        """QThread.finished 兜底：万一 signal 漏了，确保清 busy"""
+        """QThread.finished 兜底：万一 signal 漏了，确保清 busy + 释放 QThread"""
         self._set_busy(False)
-        self._worker = None
+        # Day 15: 释放 WorkerThread（避免每发一条消息泄漏一个 QThread）
+        if self._worker is not None:
+            w = self._worker
+            self._worker = None
+            # deleteLater 在事件循环里 GC，比直接 delete 安全
+            w.deleteLater()
 
     # ============ Day 11: 工具调用信号桥接 ============
     def _on_worker_tool_call_start(self, name: str, args_str: str):

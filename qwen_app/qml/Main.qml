@@ -128,9 +128,17 @@ ApplicationWindow {
             })
             msgList.positionViewAtEnd()
         }
-        // 流式追加到最后一个气泡
+        // 流式追加到最后一个匹配 who 的气泡
+        // Day 14: 多轮工具调用后顺序为 [user, ai, tool_call, tool_result, ai, tool_result]，
+        // 必须按 who 找，不能假设总是最后一个（否则 ai 流式会写到 tool_result 里）
+        function _lastIndexOf(who) {
+            for (let i = messageModel.count - 1; i >= 0; i--) {
+                if (messageModel.get(i).who === who) return i
+            }
+            return -1
+        }
         function onAppendToLast(who, content) {
-            const idx = messageModel.count - 1
+            const idx = _lastIndexOf(who)
             if (idx < 0) return
             const cur = messageModel.get(idx)
             messageModel.set(idx, { "text": cur.text + content })
@@ -141,7 +149,7 @@ ApplicationWindow {
         }
         // Day 6: 流式完成后用 Markdown 渲染版替换最后一个气泡
         function onMessageReplaced(who, newText) {
-            const idx = messageModel.count - 1
+            const idx = _lastIndexOf(who)
             if (idx < 0) return
             messageModel.set(idx, { "text": newText })
         }
@@ -614,8 +622,10 @@ ApplicationWindow {
                                 property var attachments: []
                                 onDropped: {
                                     if (drop.hasUrls && drop.urls.length > 0) {
+                                        // Day 15: 用 toLocalFile 正确处理 URL 编码（空格 → %20）
+                                        const filePath = drop.urls[0].toLocalFile()
+                                                || drop.urls[0].toString().replace("file:///", "").replace("file://", "")
                                         const fileUrl = drop.urls[0].toString()
-                                        const filePath = fileUrl.replace("file:///", "").replace("file://", "")
                                         const lower = filePath.toLowerCase()
                                         const isImage = lower.endsWith(".png") || lower.endsWith(".jpg")
                                             || lower.endsWith(".jpeg") || lower.endsWith(".gif")
