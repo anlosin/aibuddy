@@ -89,6 +89,8 @@ class ChatBridge(QObject):
             pass
         # Day 14: 插件热更新 watcher
         self._plugin_watcher = None
+        # Day 8: 当前会话 ID（main.py 启动日志读这个）
+        self._current_conv_id = None
         self._init_plugin_watcher()
 
     def _init_plugin_watcher(self):
