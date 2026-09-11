@@ -75,7 +75,7 @@ def render_day11(repo, app, engine, bridge):
 
     def step1_seed_user():
         # 1) 用户消息
-        bridge.messageAdded.emit("user", "帮我查一下天气", "10:30", False, "")
+        bridge.messageAdded.emit("user", bridge._mk_msg("帮我查一下天气", "10:30"))
 
     def step2_seed_tool_call():
         # 2) 工具调用（chat_bridge._on_worker_tool_call_start 的逻辑）
@@ -88,8 +88,9 @@ def render_day11(repo, app, engine, bridge):
 
     def step4_seed_ai():
         # 4) AI 总结回答
-        bridge.messageAdded.emit("ai", "", "10:31", False, "")
-        bridge.messageAdded.emit("ai", "上海今天是晴天，气温 18°C，空气质量良好，适合户外活动。", "10:31", False, "")
+        bridge.messageAdded.emit("ai", bridge._mk_msg("", "10:31"))
+        bridge.messageAdded.emit(
+            "ai", bridge._mk_msg("上海今天是晴天，气温 18°C，空气质量良好，适合户外活动。", "10:31"))
 
     def step5_grab():
         _grab_to_file(engine, app, out_path, "day11")

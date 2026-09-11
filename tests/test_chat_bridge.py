@@ -377,11 +377,15 @@ class TestToolCallBridge(unittest.TestCase):
     def setUp(self):
         self.bridge = ChatBridge(theme="light")
         self.created_ids = []
-        # 跟踪 messageAdded
+        # 跟踪 messageAdded（Day 17: 信号收敛为 (who, payload)）
         self.messages = []
         self.bridge.messageAdded.connect(
-            lambda who, text, ts, has_code, code: self.messages.append({
-                "who": who, "text": text, "ts": ts, "has_code": has_code, "code": code
+            lambda who, payload: self.messages.append({
+                "who": who,
+                "text": payload.get("text", ""),
+                "ts": payload.get("ts", ""),
+                "has_code": bool(payload.get("code")),
+                "code": payload.get("code", ""),
             })
         )
         # 跟踪 tool_call signals
@@ -445,9 +449,15 @@ class TestPluginReload(unittest.TestCase):
         self.bridge = ChatBridge(theme="light")
         self.reload_events = []
         self.bridge.pluginReloaded.connect(lambda n: self.reload_events.append(n))
+        # Day 17: NOTIFY 信号改成规范的无参形式（原来的 (bool, str) 被当作属性
+        # 通知信号使用，而 Qt 要求属性通知信号不带参数）
         self.tool_events = []
         self.bridge.toolCallInProgressChanged.connect(
-            lambda in_prog, name: self.tool_events.append((in_prog, name))
+            lambda: self.tool_events.append(("flag", self.bridge.toolCallInProgress))
+        )
+        self.name_events = []
+        self.bridge.currentToolNameChanged.connect(
+            lambda: self.name_events.append(self.bridge.currentToolName)
         )
 
     def test_plugin_reloaded_signal_declared(self):
@@ -464,13 +474,15 @@ class TestPluginReload(unittest.TestCase):
         self.bridge._set_tool_call_in_progress(True, "calculator")
         self.assertTrue(self.bridge.toolCallInProgress)
         self.assertEqual(self.bridge.currentToolName, "calculator")
-        self.assertEqual(self.tool_events, [(True, "calculator")])
+        self.assertEqual(self.tool_events, [("flag", True)])
+        self.assertEqual(self.name_events, ["calculator"])
 
     def test_tool_call_in_progress_dedup(self):
         """Day 15: 同状态不重复 emit"""
         self.bridge._set_tool_call_in_progress(True, "calc")
         self.bridge._set_tool_call_in_progress(True, "calc")
         self.assertEqual(len(self.tool_events), 1)
+        self.assertEqual(len(self.name_events), 1)
 
 
 class TestReadTextFile(unittest.TestCase):

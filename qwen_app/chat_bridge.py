@@ -7,11 +7,25 @@
 
 QML 端不需要知道走的是 mock 还是 real 路径，看到的都是：
 - send_message(text) — 用户发送
-- messageAdded(who, text, ts, hasCode, code) — 新气泡
+- messageAdded(who, payload) — 新气泡（payload = {text, ts, code}）
 - appendToLast(who, content) — 流式追加
 - finalizeLast(who) — 完成
 - appendError(who, text) — 错误气泡
 - themeChanged(name) — 主题切换
+
+⚠️ Day 17 重要约束（QTBUG-94360）
+--------------------------------------------------
+Qt 5.15.2（PyQt5 5.15.x 所绑定的版本，修复版本为 Qt 6.0）存在缺陷：
+QML 的 `Connections { target: <pythonObject> }` 去连接**参数 ≥3 个**的信号时，
+会在 QQmlConnections::connectSignalsToMethods → QQmlBoundSignalExpression →
+QV4::Function::updateInternalClass 路径上发生栈越界，表现为启动期随机
+0xC0000005（ACCESS_VIOLATION）或 0xC0000409（STACK_BUFFER_OVERRUN），
+且崩溃概率随 QML 体量增大而升高（极易被误判为「渲染 bug」）。
+
+参考：QTBUG-94360 / QTBUG-101264 / QTBUG-104464
+
+因此本文件里**所有可能被 QML Connections 监听的信号，参数个数必须 ≤2**。
+需要传更多字段时，把多余字段打包成 QVariantMap / QVariantList 放在第 2 个参数里。
 """
 from datetime import datetime
 from types import SimpleNamespace
@@ -26,7 +40,8 @@ from . import config as _config
 class ChatBridge(QObject):
 
     # ============ Python → QML 信号 ============
-    messageAdded = pyqtSignal(str, str, str, bool, str)   # who, text, ts, hasCode, code
+    # ⚠️ 会被 QML Connections 监听的信号：参数必须 ≤2 个（见文件头 QTBUG-94360 说明）
+    messageAdded = pyqtSignal(str, 'QVariantMap')          # who, {text, ts, code}
     appendToLast = pyqtSignal(str, str)                    # who, content
     finalizeLast = pyqtSignal(str)                          # who
     appendError = pyqtSignal(str, str)                      # who, text
@@ -36,13 +51,20 @@ class ChatBridge(QObject):
     sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
     sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
     currentModelNameChanged = pyqtSignal(str)                   # Day 10: 切换模型名名发生变化
-    # Day 11: 工具调用
+    # Day 11: 工具调用（当前 QML 未用 Connections 监听；若日后要监听，
+    # 3 参数的 toolCallResult 必须先降为 ≤2 参数）
     toolCallStarted = pyqtSignal(str, str)                       # (工具名, 参数JSON)
     toolCallResult = pyqtSignal(str, str, str)                   # (工具名, 参数, 结果)
 
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
-    toolCallInProgressChanged = pyqtSignal(bool, str)        # Day 14: 工具调用进度
+    # Day 17 修复: NOTIFY 信号必须**不带参数**。原先 toolCallInProgressChanged
+    # 声明成 pyqtSignal(bool, str) 又被两个属性当作 notify= 使用，会在元对象里
+    # 留下「带参数的通知信号」这种畸形表项；QML 的 Connections 在创建时会枚举
+    # 目标对象的元对象，踩到该表项后栈内存越界 → 启动偶发 0xC0000005 /
+    # 0xC0000409（STATUS_STACK_BUFFER_OVERRUN）。
+    toolCallInProgressChanged = pyqtSignal()                # Day 14/17: 工具调用进度 NOTIFY
+    currentToolNameChanged = pyqtSignal()                   # Day 17: 工具名 NOTIFY
     pluginReloaded = pyqtSignal(int)                        # Day 14: 插件热更新事件（参数=插件数）
 
     def _get_busy(self) -> bool:
@@ -63,12 +85,14 @@ class ChatBridge(QObject):
         """Day 14: 设工具调用进度（QML 顶栏显示"正在调用工具"）"""
         prev = getattr(self, "_is_tool_in_progress", False)
         prev_name = getattr(self, "_current_tool_name", "")
-        if in_progress != prev or name != prev_name:
+        if in_progress != prev:
             self._is_tool_in_progress = in_progress
+            self.toolCallInProgressChanged.emit()
+        if name != prev_name:
             self._current_tool_name = name
-            self.toolCallInProgressChanged.emit(in_progress, name)
+            self.currentToolNameChanged.emit()
     toolCallInProgress = pyqtProperty(bool, _get_tool_in_progress, notify=toolCallInProgressChanged)
-    currentToolName = pyqtProperty(str, _get_current_tool_name, notify=toolCallInProgressChanged)
+    currentToolName = pyqtProperty(str, _get_current_tool_name, notify=currentToolNameChanged)
 
     def __init__(self, theme="light", parent=None):
         super().__init__(parent)
@@ -126,7 +150,12 @@ class ChatBridge(QObject):
         self._plugin_reload_timer.start(300)
 
     # ============ QML → Python Slot ============
+    # Day 17 修复: QML 侧调用的是 send_message(text, false, paths)（3 个实参），
+    # 而这里原先只声明了 @pyqtSlot(str)，QML 按元对象重载解析时匹配不到 3 参重载，
+    # 发送/带图发送会直接抛 TypeError。改为注册三个重载，Python 侧按需调用也不受影响。
     @pyqtSlot(str)
+    @pyqtSlot(str, bool)
+    @pyqtSlot(str, bool, 'QVariantList')
     def send_message(self, text: str, use_fake: bool = False, image_paths=None):
         """QML 触发用户发送一条消息。
 
@@ -408,9 +437,17 @@ class ChatBridge(QObject):
         except Exception:
             return []
 
+    @staticmethod
+    def _mk_msg(text: str, ts: str, code: str = "") -> dict:
+        """Day 17: messageAdded 的负载（收敛为单个 QVariantMap，规避 QTBUG-94360）
+
+        QML 端用 `m.code.length > 0` 推导 hasCode，因此不再单独传该字段。
+        """
+        return {"text": text or "", "ts": ts or "", "code": code or ""}
+
     def _send_user_bubble(self, text: str):
         ts = datetime.now().strftime("%H:%M")
-        self.messageAdded.emit("user", text, ts, False, "")
+        self.messageAdded.emit("user", self._mk_msg(text, ts))
         # Day 10: 用户消息立即写到 SQLite（防止崩溃丢失）
         self._append_history("user", text)
 
@@ -505,7 +542,7 @@ class ChatBridge(QObject):
         # 先发一个空 ai 气泡占位（流式会填进去）
         ts = datetime.now().strftime("%H:%M")
         self._last_who = "ai"
-        self.messageAdded.emit("ai", "", ts, False, "")
+        self.messageAdded.emit("ai", self._mk_msg("", ts))
         self._worker.start()
 
     def _on_worker_chunk(self, content: str, is_thinking: bool):
@@ -514,7 +551,7 @@ class ChatBridge(QObject):
         if self._last_who != who:
             # 切段（思考 → 回答）：新建气泡
             ts = datetime.now().strftime("%H:%M")
-            self.messageAdded.emit(who, "", ts, False, "")
+            self.messageAdded.emit(who, self._mk_msg("", ts))
             self._last_who = who
         # Day 6: 累积 buffer（流式期间用 PlainText 显示，finalize 时用 Markdown 替换）
         self._stream_buffers[who] = self._stream_buffers.get(who, "") + content
@@ -582,8 +619,8 @@ class ChatBridge(QObject):
             args_display = _json.dumps(args_obj, ensure_ascii=False, indent=2)
         except Exception:
             pass
-        # 推到 messageModel（who="tool_call"，text=name，code=args，hasCode=true）
-        self.messageAdded.emit("tool_call", name, ts, True, args_display)
+        # 推到 messageModel（who="tool_call"，text=name，code=args）
+        self.messageAdded.emit("tool_call", self._mk_msg(name, ts, args_display))
         self.toolCallStarted.emit(name, args_str)
 
     def _on_worker_tool_call_result(self, name: str, args_str: str, result: str):
@@ -595,7 +632,7 @@ class ChatBridge(QObject):
         ts = _dt.now().strftime("%H:%M")
         # 截断过长结果（避免气泡爆长）
         result_display = result if len(result) <= 800 else (result[:800] + "\n... (已截断)")
-        self.messageAdded.emit("tool_result", name, ts, True, result_display)
+        self.messageAdded.emit("tool_result", self._mk_msg(name, ts, result_display))
         self.toolCallResult.emit(name, args_str, result)
 
     # ============ Day 1-2 兼容：旧 mock 路径（保留但默认不用）============
@@ -603,7 +640,7 @@ class ChatBridge(QObject):
         from datetime import datetime
         ts = datetime.now().strftime("%H:%M")
         self._last_who = "ai"
-        self.messageAdded.emit("ai", "", ts, False, "")
+        self.messageAdded.emit("ai", self._mk_msg("", ts))
         replies = [
             f"我理解你问的是：{prompt[:30]}...",
             "这是 mock 路径（Day 1-2 用），send_message 已默认改走真实路径。",

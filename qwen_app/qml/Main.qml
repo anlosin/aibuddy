@@ -113,18 +113,27 @@ ApplicationWindow {
         }
     }
 
+    // Day 17: 启动时填充侧边栏。Day 16 把 enable_plugin_watcher 挪到 main.py 时
+    // 连带删掉了 Component.onCompleted，导致"最近对话"要等到首次
+    // sessionListChanged 才会有内容（首次启动侧边栏是空的）。
+    Component.onCompleted: refreshConvList()
+
     // ===== 监听 bridge的信号 → 推入messageModel =====
     Connections {
         target: bridge
         enabled:bridge !== null
         // 完整新消息
-        function onMessageAdded(who, text, ts, hasCode, code) {
+        // Day 17: 信号收敛为 (who, {text,ts,code}) —— Qt 5.15.2 下 QML Connections
+        // 连接「≥3 个参数」的 Python 信号会栈越界崩溃（QTBUG-94360）
+        function onMessageAdded(who, m) {
+            const p = m || {}
+            const cd = p.code || ""
             messageModel.append({
                 "who": who,
-                "text": text,
-                "ts": ts,
-                "hasCode": hasCode,
-                "code": code
+                "text": p.text || "",
+                "ts": p.ts || "",
+                "hasCode": cd.length > 0,
+                "code": cd
             })
             msgList.positionViewAtEnd()
         }
