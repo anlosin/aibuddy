@@ -16,7 +16,7 @@ QML 端不需要知道走的是 mock 还是 real 路径，看到的都是：
 from datetime import datetime
 from types import SimpleNamespace
 import os
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer, QFileSystemWatcher, Qt
 
 from .worker import WorkerThread
 from .theme import markdown_to_html
@@ -42,6 +42,7 @@ class ChatBridge(QObject):
 
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
+    toolCallInProgressChanged = pyqtSignal(bool, str)        # Day 14: 工具调用进度
 
     def _get_busy(self) -> bool:
         return self._is_busy
@@ -53,6 +54,13 @@ class ChatBridge(QObject):
 
     isBusy = pyqtProperty(bool, _get_busy, _set_busy, notify=busyChanged)
 
+    def _get_tool_in_progress(self) -> bool:
+        return False
+    def _get_current_tool_name(self) -> str:
+        return ""
+    toolCallInProgress = pyqtProperty(bool, _get_tool_in_progress, notify=toolCallInProgressChanged)
+    currentToolName = pyqtProperty(str, _get_current_tool_name, notify=toolCallInProgressChanged)
+
     def __init__(self, theme="light", parent=None):
         super().__init__(parent)
         self._theme = theme
@@ -61,6 +69,49 @@ class ChatBridge(QObject):
         # Day 6: 累积 buffer（按 who 维度），finalize 时用 markdown_to_html 渲染
         self._stream_buffers = {}
         self._worker = None  # Day 7: 在初始化时就设为 None（避免 stop_chat 报 AttributeError）
+        # Day 9: 立即读当前模型名（QML 顶栏显示用）
+        self._last_model_name = "(未选择)"
+        try:
+            from . import config as _cfg
+            _m = _cfg.get_current_model()
+            if _m:
+                self._last_model_name = _m.get("name") or _m.get("model_id", "?")
+        except Exception:
+            pass
+        # Day 14: 插件热更新 watcher
+        self._plugin_watcher = None
+        self._init_plugin_watcher()
+
+    def _init_plugin_watcher(self):
+        """Day 14: 监听 plugins 目录变化"""
+        try:
+            from .plugin_manager import PLUGINS_DIR
+            if not os.path.isdir(PLUGINS_DIR):
+                return
+            self._plugin_watcher = QFileSystemWatcher([PLUGINS_DIR])
+            self._plugin_watcher.directoryChanged.connect(self._on_plugin_dir_changed)
+        except Exception as e:
+            print(f"[chat_bridge] 初始化 plugin watcher 失败: {e}")
+
+    @pyqtSlot()
+    def enable_plugin_watcher(self):
+        """Day 14: main.py QML Component.onCompleted 调这个启用 watcher
+
+        单元测试不需要 watcher（在 __init__ 跑 reload_modules 慢且影响测试），
+        推迟到 Qt 事件循环就绪后再启用。
+        """
+        if self._plugin_watcher is None:
+            self._init_plugin_watcher()
+
+    def _on_plugin_dir_changed(self, path):
+        """Day 14: 插件目录变化时触发热重载（防抖 300ms）"""
+        if hasattr(self, "_plugin_reload_timer") and self._plugin_reload_timer.isActive():
+            self._plugin_reload_timer.stop()
+        else:
+            self._plugin_reload_timer = QTimer()
+            self._plugin_reload_timer.setSingleShot(True)
+            self._plugin_reload_timer.timeout.connect(self.reload_plugins)
+        self._plugin_reload_timer.start(300)
         # Day 8: 会话状态（从 SQLite 加载当前 conv_id）
         try:
             _convs, _cur = _config.load_conversations()
@@ -78,11 +129,12 @@ class ChatBridge(QObject):
 
     # ============ QML → Python Slot ============
     @pyqtSlot(str)
-    def send_message(self, text: str, use_fake: bool = False):
+    def send_message(self, text: str, use_fake: bool = False, image_paths=None):
         """QML 触发用户发送一条消息。
 
         Day 3-5 起默认走 real 路径（fake OpenAI client + 真 WorkerThread）。
         Day 10: use_fake=True 时跳过真 LLM（截图/单元测试用，不烧 token）。
+        Day 14: image_paths - 图片附件列表（图片会转 base64 multimodal content 发送给 LLM）
         """
         if not text or not text.strip():
             return
@@ -90,8 +142,31 @@ class ChatBridge(QObject):
             # 真实实现：QML 应已禁用发送按钮；这里做兜底
             self.appendError.emit("system", "正在生成中，请稍候")
             return
-        self._send_user_bubble(text.strip())
-        self.start_real_chat(text.strip(), use_fake=use_fake)
+        text = text.strip()
+        self._send_user_bubble(text)
+        # Day 14: 构建 multimodal content（如果有图片附件）
+        user_content = self._build_user_content(text, image_paths or [])
+        self.start_real_chat(user_text=text, use_fake=use_fake, user_content=user_content)
+
+    def _build_user_content(self, text, image_paths):
+        """Day 14: 构建用户消息 content"""
+        if not image_paths:
+            return text
+        blocks = [{"type": "text", "text": text}]
+        for path in image_paths:
+            try:
+                import base64
+                with open(path, "rb") as f:
+                    data = f.read()
+                if len(data) > 4 * 1024 * 1024:
+                    continue
+                b64 = base64.b64encode(data).decode("ascii")
+                ext = path.rsplit(".", 1)[-1].lower() if "." in path else "png"
+                mime = "image/png" if ext == "png" else f"image/{ext}"
+                blocks.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            except Exception as e:
+                print(f"[chat_bridge] 图片转 base64 失败 ({path}): {e}")
+        return blocks
 
     @pyqtSlot(str)
     def send_message_mock(self, text: str):
@@ -311,6 +386,16 @@ class ChatBridge(QObject):
             print(f"[chat_bridge] discover_plugins 失败: {e}")
             return {}
 
+    @pyqtSlot()
+    def reload_plugins(self):
+        """Day 14: 强制重载 plugins 目录（reload_modules=True 清 sys.modules 缓存）"""
+        try:
+            from . import plugin_manager
+            plugins, _ = plugin_manager.discover_plugins(reload_modules=True)
+            self.pluginReloaded.emit(len(plugins))
+        except Exception as e:
+            print(f"[chat_bridge] 插件热更新失败: {e}")
+
     def _enabled_plugin_names(self) -> list:
         """Day 13: 列出已启用插件名（带 TOOLS 字段的）
 
@@ -357,7 +442,7 @@ class ChatBridge(QObject):
 
 
     # ============ Day 3-5: 真实流式（用 fake OpenAI client 跑真 WorkerThread）============
-    def start_real_chat(self, user_text: str, use_fake: bool = False):
+    def start_real_chat(self, user_text: str, use_fake: bool = False, user_content=None):
         """Day 9: 启动一个真 WorkerThread。client 优先从 config 读取：
         - 能读到 api_key/base_url → 用真 LLM则实际发 HTTP 请求。会耗 token。
         - 读不到 / 错误 → 降级到 fake client（验证信号链路用）。
@@ -400,7 +485,7 @@ class ChatBridge(QObject):
             model_id="mock-qwen",
             enable_thinking=False,
             enable_tools=True,           # Day 13: 启用工具调用
-            messages=[{"role": "user", "content": user_text}],
+            messages=[{"role": "user", "content": (user_content if user_content is not None else user_text)}],
             plugins=self._discover_plugins(),
             enabled_plugins=self._enabled_plugin_names(),
             max_rounds=3,                 # 最多 3 轮工具调用循环
@@ -442,6 +527,8 @@ class ChatBridge(QObject):
             # Day 6: 流式结束后用 markdown_to_html 渲染整段 → 替换气泡为富文本
             self._flush_stream_buffer(self._last_who)
         self._last_who = None
+        # Day 14 候选: 提前清 busy（QThread.finished 不可靠时兜底）
+        self._set_busy(False)
 
     def _flush_stream_buffer(self, who: str):
         """Day 6: 取 buffer → markdown_to_html → emit messageReplaced 让 QML 替换

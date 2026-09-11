@@ -109,6 +109,8 @@ def run_qtquick(app):
     print("[main] QtQuick UI 已启动")
     print(f"[main] bridge.isBusy = {bridge.isBusy}, 当前会话 = {bridge._current_conv_id}")
     print(f"[main] 当前模型 = {bridge._last_model_name}")
+    # Day 14: 启用插件热更新 watcher（Qt 事件循环已就绪后）
+    bridge.enable_plugin_watcher()
     return True
 
 

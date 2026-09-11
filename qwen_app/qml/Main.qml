@@ -432,6 +432,41 @@ ApplicationWindow {
                                 }
                             }
                         }
+                        // Day 14: 工具调用进度 chip（橙色脉冲）
+                        Rectangle {
+                            visible: bridge && bridge.toolCallInProgress
+                            Layout.preferredHeight: 32
+                            Layout.preferredWidth: 220
+                            radius: 16
+                            color: "#FFF7E6"
+                            border.color: "#F5A623"
+                            border.width: 1
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                spacing: 6
+                                Rectangle {
+                                    Layout.preferredWidth: 12
+                                    Layout.preferredHeight: 12
+                                    radius: 6
+                                    color: "#F5A623"
+                                    SequentialAnimation on opacity {
+                                        loops: Animation.Infinite
+                                        NumberAnimation { to: 0.3; duration: 600 }
+                                        NumberAnimation { to: 1.0; duration: 600 }
+                                    }
+                                }
+                                Text {
+                                    text: "\u6b63\u5728\u8c03\u7528\uff1a" + (bridge ? bridge.currentToolName : "")
+                                    color: "#A86D00"
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
                         Item { Layout.fillWidth: true }
                     }
                 }
@@ -637,8 +672,12 @@ ApplicationWindow {
                                             // Shift+Enter 换行
                                             event.accepted = false
                                         } else {
-                                            if (bridge)bridge.send_message(text)
+                                            if (bridge) {
+                                                const paths = fileDrop.attachments.map(function(a) { return a.path })
+                                                bridge.send_message(text, false, paths)
+                                            }
                                             text = ""
+                                            fileDrop.attachments = []
                                             event.accepted = true
                                         }
                                     }
@@ -680,8 +719,10 @@ ApplicationWindow {
                                     if (bridge.isBusy) {
                                         bridge.stop_chat()
                                     } else {
-                                        bridge.send_message(inputField.text)
+                                        const paths = fileDrop.attachments.map(function(a) { return a.path })
+                                        bridge.send_message(inputField.text, false, paths)
                                         inputField.text = ""
+                                        fileDrop.attachments = []
                                     }
                                 }
                             }
