@@ -82,15 +82,15 @@ ApplicationWindow {
         }
     })[themeName]
 
-    // Day 13: 主题切换全局颜色过渡动画
-    Behavior on color {
-        ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
-    }
-
     // ===== 消息列表（动态，bridge 信号驱动）=====
     ListModel {
         id: messageModel
     }
+
+    // Day 16: 附件状态（顶层声明，所有子节点都引用）
+    // 之前 DropArea id 在 line 614 才声明，但 line 549 的 Rectangle 引用 fileDrop，
+    // QML 加载时立即 evaluate visible binding → id 尚未 resolve → 真 GPU 渲染 segfault (0xC0000005)
+    property var fileAttachments: []
 
     // Day 8: 会话列表（动态从 bridge.list_sessions() 填充）
     ListModel {
@@ -551,7 +551,7 @@ ApplicationWindow {
 
                         // Day 13: 附件预览行（图片缩略图，仅有附件时显示）
                         Rectangle {
-                            visible: fileDrop.attachments.length > 0
+                            visible: fileAttachments.length > 0
                             Layout.preferredHeight: 64
                             Layout.fillWidth: true
                             color: root.pal.sidebarHover
@@ -563,7 +563,7 @@ ApplicationWindow {
                                 anchors.margins: 8
                                 spacing: 8
                                 Repeater {
-                                    model: fileDrop.attachments
+                                    model: fileAttachments
                                     delegate: Rectangle {
                                         Layout.preferredWidth: 48
                                         Layout.preferredHeight: 48
@@ -595,9 +595,9 @@ ApplicationWindow {
                                             MouseArea {
                                                 anchors.fill: parent
                                                 onClicked: {
-                                                    const arr = fileDrop.attachments.slice()
+                                                    const arr = fileAttachments.slice()
                                                     arr.splice(index, 1)
-                                                    fileDrop.attachments = arr
+                                                    fileAttachments = arr
                                                 }
                                             }
                                         }
@@ -617,9 +617,7 @@ ApplicationWindow {
                             // Day 12: 拖拽文件支持（文件路径填入输入框）
                             // Day 13: 图片预览 + 文本文件内容自动附加
                             DropArea {
-                                id: fileDrop
                                 anchors.fill: parent
-                                property var attachments: []
                                 onDropped: {
                                     if (drop.hasUrls && drop.urls.length > 0) {
                                         // Day 15: 用 toLocalFile 正确处理 URL 编码（空格 → %20）
@@ -631,9 +629,9 @@ ApplicationWindow {
                                             || lower.endsWith(".jpeg") || lower.endsWith(".gif")
                                             || lower.endsWith(".bmp") || lower.endsWith(".webp")
                                         if (isImage) {
-                                            const newAtts = fileDrop.attachments.slice()
+                                            const newAtts = fileAttachments.slice()
                                             newAtts.push({path: filePath, url: fileUrl, name: filePath.split(/[\\\\\\/]/).pop()})
-                                            fileDrop.attachments = newAtts
+                                            fileAttachments = newAtts
                                             inputField.text += (inputField.text ? "\n" : "") + "[\u56fe\u7247] " + filePath
                                         } else if (bridge) {
                                             const textExts = [".txt", ".md", ".py", ".js", ".ts", ".json", ".log",
@@ -683,11 +681,11 @@ ApplicationWindow {
                                             event.accepted = false
                                         } else {
                                             if (bridge) {
-                                                const paths = fileDrop.attachments.map(function(a) { return a.path })
+                                                const paths = fileAttachments.map(function(a) { return a.path })
                                                 bridge.send_message(text, false, paths)
                                             }
                                             text = ""
-                                            fileDrop.attachments = []
+                                            fileAttachments = []
                                             event.accepted = true
                                         }
                                     }
@@ -729,10 +727,10 @@ ApplicationWindow {
                                     if (bridge.isBusy) {
                                         bridge.stop_chat()
                                     } else {
-                                        const paths = fileDrop.attachments.map(function(a) { return a.path })
+                                        const paths = fileAttachments.map(function(a) { return a.path })
                                         bridge.send_message(inputField.text, false, paths)
                                         inputField.text = ""
-                                        fileDrop.attachments = []
+                                        fileAttachments = []
                                     }
                                 }
                             }

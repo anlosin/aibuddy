@@ -88,30 +88,53 @@ def _setup_qt_app(app):
 
 def run_qtquick(app):
     """走 QtQuick UI 路径。返回是否启动成功。"""
-    engine = QQmlApplicationEngine()
-    engine.warnings.connect(
-        lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
+    try:
+        engine = QQmlApplicationEngine()
+        engine.warnings.connect(
+            lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
 
-    bridge = ChatBridge(theme="light")
-    engine.rootContext().setContextProperty("bridge", bridge)
+        bridge = ChatBridge(theme="light")
+        engine.rootContext().setContextProperty("bridge", bridge)
 
-    qml_dir = os.path.join(os.path.dirname(__file__), "qwen_app", "qml")
-    engine.addImportPath(qml_dir)
-    engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
+        qml_dir = os.path.join(os.path.dirname(__file__), "qwen_app", "qml")
+        engine.addImportPath(qml_dir)
+        engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
 
-    roots = engine.rootObjects()
-    if not roots:
-        print("[main] QtQuick UI 加载失败，fallback 到 PyQt5", file=sys.stderr)
+        roots = engine.rootObjects()
+        if not roots:
+            print("[main] QtQuick UI 加载失败，fallback 到 PyQt5", file=sys.stderr)
+            return False
+        win = roots[0]
+        if win.property("visible") is False:
+            win.setProperty("visible", True)
+        print("[main] QtQuick UI 已启动", flush=True)
+        print(f"[main] bridge.isBusy = {bridge.isBusy}, 当前会话 = {bridge._current_conv_id}", flush=True)
+        print(f"[main] 当前模型 = {bridge._last_model_name}", flush=True)
+        # Day 14: 启用插件热更新 watcher（Qt 事件循环已就绪后）
+        # Day 16: 延迟到 exec_() 内启用 — 用户报告 0xC0000005 在这调用后立即崩
+        # 改在 QTimer.singleShot(0, ...) 后再启，确保 Qt 事件循环完全就绪
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, lambda: _safe_enable_watcher(bridge))
+        return True
+    except Exception as e:
+        print(f"[main] QtQuick 启动异常: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
         return False
-    win = roots[0]
-    if win.property("visible") is False:
-        win.setProperty("visible", True)
-    print("[main] QtQuick UI 已启动")
-    print(f"[main] bridge.isBusy = {bridge.isBusy}, 当前会话 = {bridge._current_conv_id}")
-    print(f"[main] 当前模型 = {bridge._last_model_name}")
-    # Day 14: 启用插件热更新 watcher（Qt 事件循环已就绪后）
-    bridge.enable_plugin_watcher()
-    return True
+
+
+def _safe_enable_watcher(bridge):
+    """Day 16: 延迟到事件循环启动后再启用插件 watcher（避开启动竞态）"""
+    try:
+        bridge.enable_plugin_watcher()
+        print("[main] 插件 watcher 已启用", flush=True)
+    except Exception as e:
+        print(f"[main] 插件 watcher 启动失败（不影响主 UI）: {e}", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[main] QtQuick 启动异常: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def run_pyqt5(app):
