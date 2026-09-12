@@ -39,11 +39,12 @@ def _get_db():
 
 
 def init_conversations_db():
-    """建表（幂等）
+    """建表 + 自动跑 schema 迁移（幂等）
 
-    schema_version 是真实的 PRAGMA user_version 计数器；
-    session_state 是独立的 current_id 持久化表（之前用 PRAGMA user_version 存
-    current_id，会话 ID 截到 31 位整数后还原会丢字符/撞 ID，已迁出）。
+    A2：启动时读 schema_version，按 _MIGRATIONS 链依次跑到最新版。
+    任何表结构变更后必须：
+      1) SCHEMA_VERSION += 1
+      2) 在 _MIGRATIONS 末尾加 _migrate_to_vN 回调（接收 db，幂等）
     """
     db = _get_db()
     db.execute("""
@@ -64,10 +65,111 @@ def init_conversations_db():
     db.execute("INSERT OR IGNORE INTO session_state (id, current_id) VALUES (1, NULL)")
     _migrate_legacy_user_version(db)
     db.commit()
+    # A2: 跑 schema 迁移链
+    _run_migrations(db)
 
 
-# 当前 schema 版本号；任何表结构变更后必须 +1 并在 _migrate_to_vN 实现迁移
+# 当前 schema 版本号；任何表结构变更后必须 +1 并在 _MIGRATIONS 实现迁移
 SCHEMA_VERSION = 1
+
+
+def _get_schema_version(db):
+    """从 PRAGMA user_version 读当前 schema 版本（首次启动返回 0）。"""
+    cur = db.execute("PRAGMA user_version").fetchone()
+    return int(cur[0]) if cur and cur[0] else 0
+
+
+def _set_schema_version(db, v):
+    """写 schema 版本到 PRAGMA user_version。"""
+    db.execute(f"PRAGMA user_version={int(v)}")
+
+
+# A2: schema 迁移链。每个迁移函数幂等（多次跑结果一致），按版本号从小到大顺序执行
+def _migrate_legacy_user_version(db):
+    """v0 → v1: 老数据库用 PRAGMA user_version 存 current_id（被截断到 31 位），
+    现迁到独立 session_state 表。
+
+    策略：
+    1. user_version 已是 SCHEMA_VERSION → 跳过
+    2. session_state.current_id 已有值 → 只同步 user_version（防御性）
+    3. 查 user_version → 还原成 hex → 反查 conversations.id 精确匹配
+       命中则 UPDATE session_state；不命中则保留 None
+    4. 不论命中与否，PRAGMA user_version 置为 SCHEMA_VERSION
+    5. current_id 仍为 None 时回退到 conversations 第一条
+       （保证 UI 不空，碰运气能恢复用户之前在看的会话）
+    """
+    cur_ver = db.execute("PRAGMA user_version").fetchone()[0]
+    if cur_ver == SCHEMA_VERSION:
+        return  # 已是最新 schema
+
+    # session_state 已有值（可能是其他迁移已写过的），只补 user_version
+    existing = db.execute(
+        "SELECT current_id FROM session_state WHERE id=1"
+    ).fetchone()
+    if existing and existing[0]:
+        db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        return
+
+    # 老格式：user_version 存的是 current_id 的 int 截位
+    if cur_ver:
+        try:
+            candidate = hex(int(cur_ver))[2:]
+            hit = db.execute(
+                "SELECT id FROM conversations WHERE id = ?", (candidate,)
+            ).fetchone()
+            if hit:
+                db.execute(
+                    "UPDATE session_state SET current_id = ? WHERE id = 1",
+                    (hit[0],),
+                )
+        except Exception:
+            pass
+
+    # 不论命中与否，schema_version 归位
+    db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    # current_id 仍为 None → 回退到 conversations 第一条
+    cur = db.execute(
+        "SELECT current_id FROM session_state WHERE id=1"
+    ).fetchone()
+    if not cur or not cur[0]:
+        first = db.execute(
+            "SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        if first:
+            db.execute(
+                "UPDATE session_state SET current_id = ? WHERE id = 1",
+                (first[0],),
+            )
+
+
+# 迁移注册表：键 = 目标版本号，值 = (旧版本号, 迁移函数)
+# 用字典保持顺序（Python 3.7+ dict 有序），按 SCHEMA_VERSION 升序跑
+_MIGRATIONS = {
+    1: (0, _migrate_legacy_user_version),
+    # v2 例子: 2: (1, lambda db: db.execute("ALTER TABLE conversations ADD COLUMN ...")
+}
+
+
+def _run_migrations(db):
+    """A2: 自动从当前 schema 版本跑到 SCHEMA_VERSION。"""
+    current = _get_schema_version(db)
+    if current >= SCHEMA_VERSION:
+        return  # 已是最新
+
+    # 按版本号升序跑未执行的迁移
+    for target in sorted(_MIGRATIONS.keys()):
+        if target <= current:
+            continue
+        prev, fn = _MIGRATIONS[target]
+        try:
+            fn(db)
+            _set_schema_version(db, target)
+            db.commit()
+        except Exception as e:
+            print(f"[config] 迁移到 schema v{target} 失败: {e}")
+            # 不 raise：保证启动可用；下次启动再试
+            break
 
 
 def _migrate_legacy_user_version(db):
