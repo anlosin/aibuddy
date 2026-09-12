@@ -15,7 +15,14 @@ CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
 CONVERSATIONS_DB = os.path.join(CONVERSATIONS_DIR, "conversations.db")
 
 # SQLite 连接是线程局部的（PyQt 主线程 + scheduler 后台线程）
+# Day 18 (M8) 线程约束：
+# - GUI 与 scheduler_run.py 不能同进程同启；同启会撞 SQLITE_BUSY
+#   （虽然 WAL 允许多读单写，但 PRAGMA user_version / create 是写操作）
+# - _local.conn 是 thread-local，但 _get_db() / _record() 内仍加锁保护
+#   防止两个 _record 路径同时写。锁不影响单连接的速度。
+import threading
 _local = threading.local()
+_CONN_LOCK = threading.Lock()
 
 
 def _get_db():
@@ -284,66 +291,73 @@ def save_single_conversation(conv, current_id):
 
     适用于仅修改当前对话 history/title 的场景（发送消息、切换对话等），
     避免全量同步带来的不必要 I/O 开销。
+
+    Day 18 (M8)：包 _CONN_LOCK 防同线程内两路并发写。
+    scheduler._record 与 chat_bridge._append_history 都会调本函数，
+    之前无锁保护，理论上同一线程内 task + 自动重试可能踩到。
     """
     init_conversations_db()
     db = _get_db()
     history_json = json.dumps(conv.get("history", []), ensure_ascii=False)
-    db.execute("""
-        INSERT INTO conversations (id, title, history, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            title=excluded.title,
-            history=excluded.history,
-            updated_at=excluded.updated_at
-    """, (
-        conv["id"],
-        conv.get("title", "新对话"),
-        history_json,
-        conv.get("created_at", ""),
-        conv.get("updated_at", conv.get("created_at", "")),
-    ))
-    if current_id:
-        db.execute(
-            "UPDATE session_state SET current_id=? WHERE id=1", (current_id,)
-        )
-    db.commit()
-
-
-def save_conversations(conversations, current_id):
-    """全量同步对话列表到 SQLite（保持与旧 JSON 接口一致）"""
-    init_conversations_db()
-    db = _get_db()
-    try:
-        # 获取现有 ID 集合
-        existing = {r["id"] for r in db.execute("SELECT id FROM conversations").fetchall()}
-        incoming = set()
-        for conv in conversations:
-            incoming.add(conv["id"])
-            history_json = json.dumps(conv.get("history", []), ensure_ascii=False)
-            db.execute("""
-                INSERT INTO conversations (id, title, history, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title=excluded.title,
-                    history=excluded.history,
-                    updated_at=excluded.updated_at
-            """, (
-                conv["id"],
-                conv.get("title", "新对话"),
-                history_json,
-                conv.get("created_at", ""),
-                conv.get("updated_at", conv.get("created_at", "")),
-            ))
-        # 删除已不在列表中的对话
-        for oid in existing - incoming:
-            db.execute("DELETE FROM conversations WHERE id=?", (oid,))
+    with _CONN_LOCK:
+        db.execute("""
+            INSERT INTO conversations (id, title, history, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title,
+                history=excluded.history,
+                updated_at=excluded.updated_at
+        """, (
+            conv["id"],
+            conv.get("title", "新对话"),
+            history_json,
+            conv.get("created_at", ""),
+            conv.get("updated_at", conv.get("created_at", "")),
+        ))
         if current_id:
             db.execute(
                 "UPDATE session_state SET current_id=? WHERE id=1", (current_id,)
             )
         db.commit()
-    except Exception as e:
-        print(f"保存对话列表失败: {e}")
+
+
+def save_conversations(conversations, current_id):
+    """全量同步对话列表到 SQLite（保持与旧 JSON 接口一致）
+
+    Day 18 (M8)：包 _CONN_LOCK + 内层 try/except，保证锁正确释放。
+    """
+    init_conversations_db()
+    db = _get_db()
+    with _CONN_LOCK:
+        try:
+            existing = {r["id"] for r in db.execute("SELECT id FROM conversations").fetchall()}
+            incoming = set()
+            for conv in conversations:
+                incoming.add(conv["id"])
+                history_json = json.dumps(conv.get("history", []), ensure_ascii=False)
+                db.execute("""
+                    INSERT INTO conversations (id, title, history, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title=excluded.title,
+                        history=excluded.history,
+                        updated_at=excluded.updated_at
+                """, (
+                    conv["id"],
+                    conv.get("title", "新对话"),
+                    history_json,
+                    conv.get("created_at", ""),
+                    conv.get("updated_at", conv.get("created_at", "")),
+                ))
+            for oid in existing - incoming:
+                db.execute("DELETE FROM conversations WHERE id=?", (oid,))
+            if current_id:
+                db.execute(
+                    "UPDATE session_state SET current_id=? WHERE id=1", (current_id,)
+                )
+            db.commit()
+        except Exception as e:
+            print(f"保存对话列表失败: {e}")
 
 
 # ═══ 插件状态 ═══

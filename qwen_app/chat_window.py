@@ -97,7 +97,13 @@ class ChatWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #666; padding: 0 8px;")
+        # Day 18 (M6)：状态栏默认有中文字体兜底，无中文字体的环境（Linux/精简镜像）
+        # 不再渲染成 `?`。QSS 用 font-family 降级链。
+        self.status_label.setStyleSheet(
+            "color: #666; padding: 0 8px;"
+            "font-family: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB',"
+            " 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'SimHei', sans-serif;"
+        )
         self.status_bar.addPermanentWidget(self.status_label)
         self.update_status()
 
