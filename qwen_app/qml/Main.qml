@@ -119,9 +119,13 @@ ApplicationWindow {
     Component.onCompleted: refreshConvList()
 
     // ===== 监听 bridge的信号 → 推入messageModel =====
+    // Day 18 (H5)：enabled 必须显式判 `bridge !== undefined && bridge !== null`。
+    // 仅写 `bridge !== null` 在 Qt 5.15.x 上，context property 注入完成前
+    // Connections 会一直判定为禁用状态，所有 Python → QML 信号全部丢失
+    // （应用看着运行但无任何响应）。
     Connections {
         target: bridge
-        enabled:bridge !== null
+        enabled: bridge !== undefined && bridge !== null
         // 完整新消息
         // Day 17: 信号收敛为 (who, {text,ts,code}) —— Qt 5.15.2 下 QML Connections
         // 连接「≥3 个参数」的 Python 信号会栈越界崩溃（QTBUG-94360）

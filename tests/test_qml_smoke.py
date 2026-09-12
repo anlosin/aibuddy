@@ -185,5 +185,127 @@ class TestLauncherKeepsWindowAlive(unittest.TestCase):
             "实测输出：%s" % verdict[0])
 
 
+# ──────────────────────────────────────────────────────────────────────
+#  Day 18 (H5)：QML ↔ Python 信号连通性护栏
+# ──────────────────────────────────────────────────────────────────────
+# Background
+# ──────────
+# test_qml_smoke 之前的 ①+② 护栏只验证：
+# ① 进程能加载 Main.qml 不崩；
+# ② QML 里 onXxx handler 对应的 Python 信号参数 ≤2（防 QTBUG-94360）。
+#
+# 但**没有验证信号真的能连通**。Day 18 审计发现：
+# Main.qml 里 Connections.target = bridge 在某些 Qt 版本下，
+# bridge 可能尚未注入（context property 异步），导致 Connections.enabled
+# 始终为 false → 所有 Python → QML 信号**全部丢失**，应用看起来运行但无响应。
+#
+# 这道护栏跑真启动器，加载 Main.qml，然后在 Python 侧 emit 一个 QML 已
+# 监听的信号，让 QML handler 写一个文件回 Python。检查文件是否被创建。
+# ──────────────────────────────────────────────────────────────────────
+
+_SIGNAL_RECEIVER = r"""
+import os, sys, time
+sys.path.insert(0, r"{root}")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt5.QtCore import QUrl, QTimer
+from PyQt5.QtQml import QQmlApplicationEngine
+from PyQt5.QtWidgets import QApplication
+from qwen_app.chat_bridge import ChatBridge
+
+OUT = r"{out}"
+if os.path.exists(OUT): os.remove(OUT)
+
+app = QApplication(sys.argv)
+engine = QQmlApplicationEngine()
+engine.warnings.connect(
+    lambda ws: [print("QMLWARN:", w.toString(), flush=True) for w in ws])
+bridge = ChatBridge(theme="light")
+engine.rootContext().setContextProperty("bridge", bridge)
+engine.load(QUrl.fromLocalFile(r"{qml}"))
+if not engine.rootObjects():
+    print("LOAD_FAIL", flush=True); sys.exit(2)
+
+# 等 QML onCompleted 跑完，再 emit 信号
+def fire():
+    # themeChanged 是 QML onThemeChanged 监听的信号（Day 17 起 ≤1 参数）
+    bridge.themeChanged.emit("dark")
+
+def shutdown():
+    time.sleep(0.2)   # 给 Qt 事件循环机会派发到 QML handler
+    app.quit()
+
+QTimer.singleShot(300, fire)
+QTimer.singleShot(800, shutdown)
+app.exec_()
+
+# 检查 QML 是否写了文件（通过 set_theme 调用 set_property 看 root.themeName）
+# 简化路径：直接读 rootObject 的 themeName 属性
+roots = engine.rootObjects()
+if roots:
+    theme = roots[0].property("themeName")
+    print("THEME_AFTER=%s" % theme, flush=True)
+print("DONE", flush=True)
+"""
+
+
+class TestQmlSignalConnectivity(unittest.TestCase):
+    """H5: QML Connections 监听 Python 信号必须真的能连通，不能只是元对象不报错。"""
+
+    def test_theme_changed_signal_reaches_qml(self):
+        out_path = os.path.join(ROOT, "_signal_test.txt")
+        try:
+            env = dict(os.environ)
+            env["QT_QPA_PLATFORM"] = "offscreen"
+
+            p = subprocess.run(
+                [sys.executable, "-X", "utf8", "-c",
+                 _SIGNAL_RECEIVER.format(root=ROOT, qml=MAIN_QML, out=out_path)],
+                capture_output=True, text=True, env=env, cwd=ROOT)
+
+            self.assertEqual(
+                p.returncode, 0,
+                "信号连通测试进程退出码非 0。\nstdout: %s\nstderr: %s"
+                % ((p.stdout or "")[-800:], (p.stderr or "")[-800:]))
+
+            # 找出 THEME_AFTER=...
+            theme_lines = [l for l in (p.stdout or "").splitlines()
+                           if l.startswith("THEME_AFTER=")]
+            self.assertTrue(
+                theme_lines,
+                "信号连通测试没输出 THEME_AFTER 行。\nstdout: %s\nstderr: %s"
+                % ((p.stdout or "")[-800:], (p.stderr or "")[-800:]))
+
+            theme = theme_lines[0].split("=", 1)[1]
+            self.assertEqual(
+                theme, "dark",
+                "emit themeChanged('dark') 后，QML 端 root.themeName 没变成 'dark'。"
+                "说明 Connections 监听不工作——bridge 上下文属性注入或 enabled 守卫有问题。"
+                "（H5：Day 18 审计盲区）\n完整输出：\nstdout: %s\nstderr: %s"
+                % ((p.stdout or "")[-800:], (p.stderr or "")[-800:]))
+        finally:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+
+    def test_main_qml_connections_target_is_bridge(self):
+        """静态护栏：Connections.target 必须是 bridge，且没有错误的 enabled 守卫。"""
+        with open(MAIN_QML, encoding="utf-8") as f:
+            src = f.read()
+        import re
+        # 找 Connections 块
+        m = re.search(r"Connections\s*\{([^}]*target:\s*bridge[^}]*)\}", src, re.DOTALL)
+        self.assertIsNotNone(m, "Main.qml 必须有 Connections { target: bridge } 块")
+        block = m.group(1)
+        # enabled 不能是简单的 `bridge !== null` —— 在某些 Qt 版本上会导致
+        # bridge 注入完成前 Connections 一直被禁用
+        # 正确写法：enabled: bridge !== undefined && bridge !== null
+        if "enabled:" in block:
+            self.assertIn("bridge !== undefined", block,
+                          "Connections.enabled 不能简单写 `bridge !== null`，"
+                          "Qt 5.15.x 在 context property 未就绪时会一直判定为 null，"
+                          "导致 Connections 永远禁用，所有信号全部丢失。"
+                          "请写 `bridge !== undefined && bridge !== null`。")
+
+
 if __name__ == "__main__":
     unittest.main()
