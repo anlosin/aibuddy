@@ -13,10 +13,16 @@ QML 的 `Connections { target: <pythonObject> }` 去连接**参数 ≥3 个**的
 - 普通单元测试（只测 Python 对象）覆盖不到；
 - 极易被误判成渲染 / GPU 问题（实测 offscreen 也复现）。
 
-所以这里放两道护栏：
+所以这里放三道护栏：
 1. 真的把 Main.qml 加载 + 渲染一遍，看进程退出码；
 2. 静态检查：Main.qml 里实际出现的每个 `function onXxx(...)`，
    其对应的 ChatBridge 信号参数必须 ≤2。
+3. 用真实启动器 `main.run_qtquick()` 拉起一次，断言确实产生了顶层窗口。
+
+第 3 条防的是另一类静默故障：`QQmlApplicationEngine` 若只作为函数局部变量，
+函数返回后会被 GC 回收（PyQt 持有其所有权），其创建的 QML 根窗口一并销毁 ——
+进程活着、`app.exec_()` 在跑、启动日志照常打印，但**一个窗口都没有**。
+这类问题同样抓不到：不崩、不报错、Python 层无异常。
 """
 import os
 import re
@@ -130,6 +136,53 @@ class TestQmlSignalArity(unittest.TestCase):
             "QML Connections 监听的信号必须 ≤2 个参数，否则 Qt 5.15.2 会在启动期"
             "栈越界崩溃（QTBUG-94360）。请把多余字段打包成 QVariantMap / "
             "QVariantList 放进第 2 个参数。违规项：\n  - %s" % "\n  - ".join(offenders))
+
+
+_WINDOW_CHECKER = r"""
+import os, sys
+sys.path.insert(0, r"{root}")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt5.QtWidgets import QApplication
+import main as launcher
+
+app = QApplication(sys.argv)
+launcher._set_qt_attributes()
+launcher._setup_qt_app(app)
+ok = launcher.run_qtquick(app)
+wins = app.topLevelWindows()
+print("VERDICT=%s ok=%s windows=%d titles=%r"
+      % ("PASS" if (ok and wins) else "FAIL", ok, len(wins),
+         [w.title() for w in wins]), flush=True)
+"""
+
+
+class TestLauncherKeepsWindowAlive(unittest.TestCase):
+    """真实启动器跑一遍：必须留下一个顶层窗口。
+
+    防「QQmlApplicationEngine 被 GC 回收 → 静默无界面」：
+    engine 作为局部变量时函数返回即析构，其 QML 根窗口一起消失。
+    """
+
+    def test_run_qtquick_leaves_a_toplevel_window(self):
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"      # 不弹窗，但仍能判定窗口是否存活
+        env["QT_LOGGING_RULES"] = "qt.qpa.*=false"
+
+        p = subprocess.run(
+            [sys.executable, "-X", "utf8", "-c", _WINDOW_CHECKER.format(root=ROOT)],
+            capture_output=True, text=True, env=env, cwd=ROOT)
+
+        verdict = [l for l in (p.stdout or "").splitlines() if l.startswith("VERDICT=")]
+        self.assertTrue(
+            verdict,
+            "窗口检查器没有输出判定行（可能启动就挂了）。\nstdout:\n%s\nstderr:\n%s"
+            % ((p.stdout or "")[-800:], (p.stderr or "")[-800:]))
+        self.assertIn(
+            "VERDICT=PASS", verdict[0],
+            "run_qtquick() 之后没有任何顶层窗口 —— 界面不会显示。\n"
+            "最常见原因：QQmlApplicationEngine 只被局部变量引用，函数返回后被 GC 回收，"
+            "它创建的 QML 根窗口随之销毁。请在模块级（如 main._KEEP_ALIVE）持有引用。\n"
+            "实测输出：%s" % verdict[0])
 
 
 if __name__ == "__main__":

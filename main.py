@@ -49,12 +49,25 @@ from PyQt5.QtQml import QQmlApplicationEngine
 from qwen_app.chat_bridge import ChatBridge
 
 
-def _setup_qt_app(app):
-    """复用 PyQt5 原有的全局加固（颜色/字体）"""
+# 顶层对象的「保活区」。
+#
+# 为什么必须存在：QQmlApplicationEngine / ChatWindow 都是 Python 侧创建、由 PyQt
+# 持有所有权的 QObject。若它们只是 run_qtquick()/run_pyqt5() 的局部变量，函数一返回
+# 就被 Python GC 回收 —— engine 析构会连带销毁它创建的 QML 根窗口。结果是进程活着、
+# app.exec_() 在跑、启动日志也正常打印，但**一个窗口都没有**（"启动不显示界面"）。
+_KEEP_ALIVE = {}
+
+
+def _set_qt_attributes():
+    """高 DPI 属性必须在 QApplication 创建『之前』设置，否则不生效并打印告警。"""
     if hasattr(Qt, 'AA_EnableHighDpiScaling'):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
+
+def _setup_qt_app(app):
+    """复用 PyQt5 原有的全局加固（颜色/字体）"""
     app.setStyle("Fusion")
     # Fusion 风格下，自定义白底 QSS 的 QComboBox 弹窗项在 hover/选中时
     # 文字颜色未被显式定义会继承成透明（悬停即空白行）。此处统一给所有下拉弹窗
@@ -96,6 +109,10 @@ def run_qtquick(app):
         bridge = ChatBridge(theme="light")
         engine.rootContext().setContextProperty("bridge", bridge)
 
+        # 保活：engine 一旦被 GC，QML 根窗口立即销毁（见 _KEEP_ALIVE 注释）
+        _KEEP_ALIVE["engine"] = engine
+        _KEEP_ALIVE["bridge"] = bridge
+
         qml_dir = os.path.join(os.path.dirname(__file__), "qwen_app", "qml")
         engine.addImportPath(qml_dir)
         engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
@@ -103,9 +120,11 @@ def run_qtquick(app):
         roots = engine.rootObjects()
         if not roots:
             print("[main] QtQuick UI 加载失败，fallback 到 PyQt5", file=sys.stderr)
+            _KEEP_ALIVE.pop("engine", None)   # 别让 fallback 一直拎着这个失败的 engine
+            _KEEP_ALIVE.pop("bridge", None)
             return False
         win = roots[0]
-        if win.property("visible") is False:
+        if not win.property("visible"):
             win.setProperty("visible", True)
         print("[main] QtQuick UI 已启动", flush=True)
         print(f"[main] bridge.isBusy = {bridge.isBusy}, 当前会话 = {bridge._current_conv_id}", flush=True)
@@ -130,11 +149,6 @@ def _safe_enable_watcher(bridge):
         print("[main] 插件 watcher 已启用", flush=True)
     except Exception as e:
         print(f"[main] 插件 watcher 启动失败（不影响主 UI）: {e}", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[main] QtQuick 启动异常: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc()
-        return False
 
 
 def run_pyqt5(app):
@@ -143,6 +157,7 @@ def run_pyqt5(app):
     print("[main] 走 PyQt5 ChatWindow (原始路径)", file=sys.stderr)
     window = ChatWindow()
     window.show()
+    _KEEP_ALIVE["window"] = window    # 同上：局部变量会被 GC，窗口随之消失
     return True
 
 
@@ -152,6 +167,7 @@ def main():
     force_qtquick = "--qtquick" in args
     # 默认走 QtQuick
 
+    _set_qt_attributes()              # 必须在 QApplication 之前
     app = QApplication(sys.argv)
     _setup_qt_app(app)
 
