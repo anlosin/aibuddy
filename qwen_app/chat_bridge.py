@@ -56,6 +56,19 @@ class ChatBridge(QObject):
     toolCallStarted = pyqtSignal(str, str)                       # (工具名, 参数JSON)
     toolCallResult = pyqtSignal(str, str, str)                   # (工具名, 参数, 结果)
 
+    # Day 18: read_text_file 接受的扩展名白名单（C3 安全修复）。
+    # 限制为文本/代码/配置/文档类；拒绝二进制、可执行、压缩包、密钥/凭据类。
+    _READABLE_EXT = (
+        '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.json5', '.md', '.rst', '.txt',
+        '.log', '.html', '.htm', '.css', '.scss', '.less',
+        '.sh', '.bash', '.zsh', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf', '.env',
+        '.xml', '.svg', '.csv', '.tsv', '.sql',
+        '.java', '.kt', '.scala', '.go', '.rs', '.rb', '.php', '.pl',
+        '.cpp', '.cxx', '.cc', '.c', '.h', '.hpp', '.m', '.mm', '.cs',
+        '.lua', '.vim', '.dockerfile', '.gitignore', '.gitattributes',
+        '.gradle', '.properties',
+    )
+
     # ============ 内部状态（暴露给测试/QML 读）============
     busyChanged = pyqtSignal(bool)                          # Day 7: 发送/停止按钮切换的 NOTIFY 信号
     # Day 17 修复: NOTIFY 信号必须**不带参数**。原先 toolCallInProgressChanged
@@ -366,11 +379,25 @@ class ChatBridge(QObject):
 
         返回格式: "[文件: 路径]\n```lang\n内容\n```"
         - 限制 50KB（更大截断 + 提示）
-        - 只读文本类（按扩展名白名单 + try-except 兜底）
+        - 只读文本类：扩展名白名单 + 绝对路径拒绝（防敏感文件泄露）
         - 出错返回 "[读文件失败: ...]"
+
+        安全（Day 18 修复 C3）：
+        - 拒绝绝对路径（仅接受拖入工作区内的相对路径；之前任意路径都接受，
+          导致 ~/.ssh/id_rsa、/etc/passwd 等可被读 + 走 LLM 泄露）
+        - 扩展名白名单（见 _READABLE_EXT）；二进制/可执行/压缩包直接拒绝
         """
         if not file_path:
             return ""
+        # C3 修复：拒绝绝对路径
+        # 跨平台绝对路径：os.path.isabs 在 Windows 不认 /etc/passwd 这种 POSIX 风格；
+        # Qt 拖入文件用 file:/// URL 是 POSIX 风格，必须额外判断
+        if os.path.isabs(file_path) or file_path.startswith("/"):
+            return ("[读文件失败: 不支持绝对路径（仅允许读取程序工作目录内的文本文件）]")
+        # C3 修复：扩展名白名单
+        lower = file_path.lower()
+        if not any(lower.endswith(ext) for ext in self._READABLE_EXT):
+            return ("[读文件失败: 不支持的文件类型（仅文本/代码/配置/文档类）]")
         # 文件大小检查（50KB 限制）
         MAX_SIZE = 50 * 1024
         try:
@@ -382,14 +409,15 @@ class ChatBridge(QObject):
         else:
             truncated_msg = None
         # 按扩展名选语言标签
-        lower = file_path.lower()
         lang = "text"
         for ext, l in ((".py", "python"), (".js", "javascript"), (".ts", "typescript"),
                         (".json", "json"), (".md", "markdown"), (".html", "html"),
                         (".css", "css"), (".sh", "bash"), (".yml", "yaml"),
                         (".yaml", "yaml"), (".xml", "xml"), (".sql", "sql"),
                         (".java", "java"), (".go", "go"), (".rs", "rust"),
-                        (".cpp", "cpp"), (".c", "c"), (".h", "c")):
+                        (".cpp", "cpp"), (".c", "c"), (".h", "c"), (".txt", "text"),
+                        (".log", "text"), (".ini", "ini"), (".cfg", "ini"),
+                        (".toml", "ini"), (".env", "ini"), (".csv", "text")):
             if lower.endswith(ext):
                 lang = l
                 break
