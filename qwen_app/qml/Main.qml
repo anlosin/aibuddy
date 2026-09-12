@@ -204,6 +204,11 @@ ApplicationWindow {
     }
 
     // ============ Day 12: 全局快捷键 ============
+    // Day 18 (M5)：给所有破坏性 shortcut 加 inputField focus 检查。
+    // 之前 Ctrl+L / Ctrl+N / Ctrl+T 在 inputField 聚焦时仍触发（Shortcut 默认
+    // Qt.WindowShortcut 优先级高于 QML 子控件），导致用户输入框里按 Ctrl+L
+    // 全选变成"清空全部消息"。这里加 enabled 守卫：inputField 失焦时才生效。
+    // "Esc" 和 "Ctrl+K" 已在 enabled 中检查 isBusy（停止生成专用）。
     Shortcut {
         sequence: "Esc"
         enabled: bridge !== undefined && bridge !== null && bridge.isBusy
@@ -211,14 +216,17 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+L"
+        enabled: bridge !== undefined && bridge !== null && !inputField.activeFocus
         onActivated: messageModel.clear()
     }
     Shortcut {
         sequence: "Ctrl+T"
+        enabled: bridge !== undefined && bridge !== null && !inputField.activeFocus
         onActivated: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
     }
     Shortcut {
         sequence: "Ctrl+N"
+        enabled: bridge !== undefined && bridge !== null && !inputField.activeFocus
         onActivated: if (bridge) bridge.create_session("新对话")
     }
     Shortcut {

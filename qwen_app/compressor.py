@@ -30,12 +30,6 @@ class ConversationCompressor:
             raise ImportError("需要安装 openai 库：pip install openai")
 
         self.model_id = model_id
-        self._is_compressing = False
-
-    @property
-    def is_compressing(self) -> bool:
-        """是否正在压缩中"""
-        return self._is_compressing
 
     def compress(self, history: List[Dict]) -> Tuple[List[Dict], Dict]:
         """
@@ -134,12 +128,16 @@ class ConversationCompressor:
         })
 
         try:
-            # 调用 API 生成摘要
+            # Day 18 (M4)：补 timeout=60。
+            # 压缩 1000+ 条对话时若不传 timeout，openai 客户端默认 600 秒
+            # 会冻 GUI 主线程（compress_conversation 调在主线程，
+            # QApplication.processEvents() 不会推进计时器）。
             response = self.client.chat.completions.create(
                 model=self.model_id,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=600
+                max_tokens=600,
+                timeout=60,
             )
 
             summary_text = response.choices[0].message.content.strip()
@@ -218,7 +216,3 @@ class ConversationCompressor:
         """获取当前时间戳"""
         from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    def cancel_operation(self):
-        """取消当前操作"""
-        self._is_compressing = False
