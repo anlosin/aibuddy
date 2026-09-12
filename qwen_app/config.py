@@ -32,7 +32,12 @@ def _get_db():
 
 
 def init_conversations_db():
-    """建表（幂等）"""
+    """建表（幂等）
+
+    schema_version 是真实的 PRAGMA user_version 计数器；
+    session_state 是独立的 current_id 持久化表（之前用 PRAGMA user_version 存
+    current_id，会话 ID 截到 31 位整数后还原会丢字符/撞 ID，已迁出）。
+    """
     db = _get_db()
     db.execute("""
         CREATE TABLE IF NOT EXISTS conversations (
@@ -43,7 +48,63 @@ def init_conversations_db():
             updated_at  TEXT NOT NULL
         )
     """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS session_state (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            current_id  TEXT
+        )
+    """)
+    db.execute("INSERT OR IGNORE INTO session_state (id, current_id) VALUES (1, NULL)")
+    _migrate_legacy_user_version(db)
     db.commit()
+
+
+# 当前 schema 版本号；任何表结构变更后必须 +1 并在 _migrate_to_vN 实现迁移
+SCHEMA_VERSION = 1
+
+
+def _migrate_legacy_user_version(db):
+    """兼容迁移：老版本用 PRAGMA user_version 存 current_id（被截到 31 位整数）。
+
+    这里把 user_version 的值当作 "可能的 current_id 候选" —— 反查 conversations.id
+    能精确匹配上的直接修复到 session_state；匹配不上的回退到第一条对话，
+    保证不丢用户可见数据（多切几次会话碰运气才能恢复，但首启动场景下多数可还原）。
+    同步把 schema_version 设为 SCHEMA_VERSION，让 _migrate_to_v1 不再重复执行。
+    """
+    cur_ver = db.execute("PRAGMA user_version").fetchone()[0]
+    if cur_ver == SCHEMA_VERSION:
+        return                                  # 已是最新 schema，无需迁移
+    # 检查 session_state 是否已有 current_id
+    existing = db.execute("SELECT current_id FROM session_state WHERE id=1").fetchone()
+    if existing and existing[0]:
+        # 已是新 schema 但 PRAGMA 没同步 —— 把 PRAGMA 修正过来即可
+        db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        return
+    if cur_ver:
+        # 老格式：user_version 存的是 current_id 的 int 截位 → 还原成 hex → 反查
+        try:
+            candidate = hex(int(cur_ver))[2:]
+            hit = db.execute(
+                "SELECT id FROM conversations WHERE id = ?", (candidate,)
+            ).fetchone()
+            if hit:
+                db.execute(
+                    "UPDATE session_state SET current_id = ? WHERE id = 1", (hit[0],)
+                )
+        except Exception:
+            pass
+    # 不论命中与否：把 user_version 重置为真正的 schema 版本
+    db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    # 会话仍为 None 时回退到第一条（保证 UI 不空）
+    cur = db.execute("SELECT current_id FROM session_state WHERE id=1").fetchone()
+    if not cur or not cur[0]:
+        first = db.execute(
+            "SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        if first:
+            db.execute(
+                "UPDATE session_state SET current_id = ? WHERE id = 1", (first[0],)
+            )
 
 
 # ═══ 模型配置 ═══
@@ -170,7 +231,8 @@ def make_openai_client(api_key, base_url, proxy=""):
 def load_conversations():
     """从 SQLite 加载对话列表，返回 (conversations: list, current_id: str|None)
 
-    返回格式与旧 JSON 一致，chat_window.py 无需改动。
+    current_id 现在持久化在独立的 session_state 表（不再用 PRAGMA user_version
+    那种会被截断的方式）。返回格式与旧 JSON 一致，chat_window.py 无需改动。
     """
     init_conversations_db()
     db = _get_db()
@@ -190,23 +252,31 @@ def load_conversations():
                 "history": history,
                 "created_at": r["created_at"],
             })
-        # current_id 存为 pragma（单值，跨线程安全）
-        # Day 15: 读出时还原成 hex 字符串（存时是 int(hex_id, 16)）
-        cur = db.execute("PRAGMA user_version").fetchone()
-        if cur and cur[0]:
-            # 与 save_single_conversation/save_conversations 一致：hex ID 存为整数
-            try:
-                current_id = hex(int(cur[0]))[2:]  # "0xabcd" -> "abcd"
-            except Exception:
-                current_id = None
-        else:
-            current_id = None
+        cur = db.execute("SELECT current_id FROM session_state WHERE id=1").fetchone()
+        current_id = cur[0] if cur else None
         # 如果 current_id 指向的对话已被删除，回退到第一个
         if current_id and not any(c["id"] == current_id for c in convs):
             current_id = convs[0]["id"] if convs else None
+            if current_id:
+                db.execute(
+                    "UPDATE session_state SET current_id=? WHERE id=1", (current_id,)
+                )
+                db.commit()
         return convs, current_id
     except Exception:
         return [], None
+
+
+def set_current_conversation(conv_id):
+    """显式设置当前会话（持久化到 session_state）。
+
+    与 save_single_conversation/save_conversations 不同：本函数只动 current_id，
+    不重写 history，避免读改写竞争（多 worker 并发场景下更安全）。
+    """
+    init_conversations_db()
+    db = _get_db()
+    db.execute("UPDATE session_state SET current_id=? WHERE id=1", (conv_id,))
+    db.commit()
 
 
 def save_single_conversation(conv, current_id):
@@ -233,11 +303,9 @@ def save_single_conversation(conv, current_id):
         conv.get("updated_at", conv.get("created_at", "")),
     ))
     if current_id:
-        try:
-            ver = int(current_id, 16) & 0x7FFFFFFF
-        except (ValueError, TypeError):
-            ver = abs(hash(current_id)) & 0x7FFFFFFF
-        db.execute(f"PRAGMA user_version={ver}")
+        db.execute(
+            "UPDATE session_state SET current_id=? WHERE id=1", (current_id,)
+        )
     db.commit()
 
 
@@ -269,14 +337,10 @@ def save_conversations(conversations, current_id):
         # 删除已不在列表中的对话
         for oid in existing - incoming:
             db.execute("DELETE FROM conversations WHERE id=?", (oid,))
-        # 用 user_version 存 current_id（整数，最多存 8 位 ID）
-        # 如果 ID 不是纯数字，用 hash
         if current_id:
-            try:
-                ver = int(current_id, 16) & 0x7FFFFFFF
-            except (ValueError, TypeError):
-                ver = abs(hash(current_id)) & 0x7FFFFFFF
-            db.execute(f"PRAGMA user_version={ver}")
+            db.execute(
+                "UPDATE session_state SET current_id=? WHERE id=1", (current_id,)
+            )
         db.commit()
     except Exception as e:
         print(f"保存对话列表失败: {e}")
