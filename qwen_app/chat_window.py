@@ -628,13 +628,21 @@ class ChatWindow(QMainWindow):
         self.worker_thread.tool_call_start.connect(self.handle_tool_call_start)
         self.worker_thread.tool_call_result.connect(self.handle_tool_call_result)
         self.worker_thread.finished.connect(self._on_worker_finished)
+        # Day 18 (H2 修复)：WorkerThread 必须 deleteLater，避免每发一条消息泄漏
+        # 一个 QThread。chat_bridge (QtQuick) 路径已有 deleteLater，这里补齐。
+        self.worker_thread.finished.connect(lambda wt=self.worker_thread: wt.deleteLater())
         self.worker_thread.start()
 
     def on_stop_response(self):
-        if self.worker_thread:
-            self._stop_worker_thread()
-            self.display_message("系统", "已中断回复", "system")
-            self._on_worker_finished()
+        # Day 18 (H6 修复)：只发停止信号，不再 wait（之前 wait(3000) 会冻 GUI 主线程 3 秒）。
+        # finished 信号会自动触发 _on_worker_finished + deleteLater，无需手动调。
+        if self.worker_thread is None:
+            return
+        self._stop_worker_thread()
+        self.display_message("系统", "已中断回复", "system")
+        # 注意：不要再手动 _on_worker_finished —— finished 信号到来时会自动调
+        # 否则按钮状态被重置两次：第二次用户已看到"发送"可点，但 worker 实际
+        # 还在跑（在 stream 收尾），发出新消息会冲突。
 
     def _on_worker_finished(self):
         self.send_button.setEnabled(True)
@@ -644,28 +652,24 @@ class ChatWindow(QMainWindow):
         self.update_status()
 
     def _stop_worker_thread(self, timeout_ms=3000):
-        """协作式停止后台回复线程。
+        """协作式停止后台回复线程（Day 18 H6 修订：不再 wait）。
 
-        仅设置停止信号并等待线程自行退出，**绝不调用 QThread.terminate()**。
-        terminate() 会瞬间杀死线程，可能让 OpenAI 流式连接 / SSL socket / 全局
-        client 处于不一致状态，导致界面卡死、文件描述符泄漏甚至崩溃。
-        WorkerThread.run() 每收到一个 chunk、每轮、每次工具调用后都会检查停止
-        信号并安全关闭连接，通常在下一个 chunk 到达前即可干净退出；极端情况下
-        线程阻塞在 recv 等待网络数据，会随 socket 超时（API_TIMEOUT）自行释放。
+        仅设置停止信号并返回。线程退出由 WorkerThread.finished 信号统一驱动
+        （包括 _on_worker_finished + deleteLater），主线程不阻塞。
 
-        注意：self.worker_thread 在 wait 之前就置 None，避免超时后线程成为
-        孤儿（后续 on_stop_response 检查 self.worker_thread 时不会重复停止）。
+        QThread.terminate() 永不调用 —— 会瞬间杀死线程，可能让 OpenAI 流式
+        连接 / SSL socket / 全局 client 处于不一致状态。WorkerThread.run()
+        每收到一个 chunk / 每轮 / 每次工具调用后都会检查停止信号并安全关闭
+        连接；极端阻塞在 recv 时会随 socket 超时（API_TIMEOUT）自行释放。
+
+        timeout_ms 形参保留仅为兼容现有调用点，实际不再使用。
         """
         wt = self.worker_thread
         if wt is None:
             return
-        self.worker_thread = None          # 先置 None，防止重复调用
         wt.stop()                          # 置位 _stop_event
-        if not wt.wait(timeout_ms):        # 等待其自行结束
-            # 等待超时：极可能是网络阻塞在 recv，不 terminate()，仅告警，
-            # 让线程随 stream 超时自然退出，避免强行杀线程带来的不确定后果。
-            print(f"[warn] 后台回复线程未在 {timeout_ms}ms 内退出，"
-                  f"等待其随网络超时自行结束（未使用 terminate）")
+        # 不 wait，依赖 finished signal 异步回收
+        self.worker_thread = None
 
     # ── 格式化 ──
 

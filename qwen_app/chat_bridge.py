@@ -30,6 +30,7 @@ QV4::Function::updateInternalClass 路径上发生栈越界，表现为启动期
 from datetime import datetime
 from types import SimpleNamespace
 import os
+import threading
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer, QFileSystemWatcher, Qt
 
 from .worker import WorkerThread
@@ -79,6 +80,7 @@ class ChatBridge(QObject):
     toolCallInProgressChanged = pyqtSignal()                # Day 14/17: 工具调用进度 NOTIFY
     currentToolNameChanged = pyqtSignal()                   # Day 17: 工具名 NOTIFY
     pluginReloaded = pyqtSignal(int)                        # Day 14: 插件热更新事件（参数=插件数）
+    pluginReloadFailed = pyqtSignal(str)                   # Day 18 (M7): 重载失败时把错误带回来
 
     def _get_busy(self) -> bool:
         return self._is_busy
@@ -115,6 +117,12 @@ class ChatBridge(QObject):
         # Day 6: 累积 buffer（按 who 维度），finalize 时用 markdown_to_html 渲染
         self._stream_buffers = {}
         self._worker = None  # Day 7: 在初始化时就设为 None（避免 stop_chat 报 AttributeError）
+        # Day 18 (H1)：当前正在跑的 worker 数。reload_plugins 与正在执行的
+        # worker 存在数据竞争（worker 持有 plugin module 对象引用，reload
+        # 会从 sys.modules 删 module，对象变成 unbound，工具调用会抛
+        # AttributeError）；reload 检测到 > 0 时推迟重试。
+        self._worker_count = 0
+        self._worker_count_lock = threading.Lock()
         # Day 9: 立即读当前模型名（QML 顶栏显示用）
         self._last_model_name = "(未选择)"
         try:
@@ -445,13 +453,38 @@ class ChatBridge(QObject):
 
     @pyqtSlot()
     def reload_plugins(self):
-        """Day 14: 强制重载 plugins 目录（reload_modules=True 清 sys.modules 缓存）"""
+        """Day 14: 强制重载 plugins 目录（reload_modules=True 清 sys.modules 缓存）
+
+        Day 18 (H1 修复)：如果当前有 worker 在跑（_worker_count > 0），
+        直接 reload 会让 worker 持有的 plugin module 对象引用 unbound，
+        工具调用会抛 AttributeError（半写半未写风险）。推迟到所有 worker 退出后
+        再 reload（最多等 5 秒，超时仍尝试但 emit 失败信号）。
+        Day 18 (M7)：失败时通过 pluginReloadFailed 信号把错误传回 QML，
+        不再仅 print 到 stderr（GUI 之前看不到）。
+        """
+        with self._worker_count_lock:
+            if self._worker_count > 0:
+                self._reload_pending = True
+                self._reload_attempts = getattr(self, "_reload_attempts", 0) + 1
+                if self._reload_attempts <= 50:        # 50 × 100ms = 5s 超时
+                    QTimer.singleShot(100, self.reload_plugins)
+                    return
+                # 超时：强制尝试 + emit 失败警告
+                self._reload_pending = False
+                self.pluginReloadFailed.emit("worker 在 5 秒内未退出，强制重载可能半写")
+        self._reload_attempts = 0
+        self._do_reload_plugins()
+
+    def _do_reload_plugins(self):
+        """实际执行 reload（被 reload_plugins / 延迟重试调用）"""
         try:
             from . import plugin_manager
             plugins, _ = plugin_manager.discover_plugins(reload_modules=True)
             self.pluginReloaded.emit(len(plugins))
         except Exception as e:
-            print(f"[chat_bridge] 插件热更新失败: {e}")
+            err = f"{type(e).__name__}: {e}"
+            print(f"[chat_bridge] 插件热更新失败: {err}")
+            self.pluginReloadFailed.emit(err)
 
     def _enabled_plugin_names(self) -> list:
         """Day 13: 列出已启用插件名（带 TOOLS 字段的）
@@ -565,12 +598,18 @@ class ChatBridge(QObject):
         self._worker.tool_call_result.connect(self._on_worker_tool_call_result)
         # 线程 finished 也清 busy
         self._worker.finished.connect(self._on_worker_finished)
+        # Day 18 (H2 修复)：WorkerThread 必须 deleteLater（每发一条消息会
+        # new 一个新 QThread，不释放会泄漏）
+        self._worker.finished.connect(lambda wt=self._worker: wt.deleteLater())
         # 启动
         self._set_busy(True)
         # 先发一个空 ai 气泡占位（流式会填进去）
         ts = datetime.now().strftime("%H:%M")
         self._last_who = "ai"
         self.messageAdded.emit("ai", self._mk_msg("", ts))
+        # Day 18 (H1)：启动 worker 时 +1 计数（reload_plugins 据此判断能否重载）
+        with self._worker_count_lock:
+            self._worker_count += 1
         self._worker.start()
 
     def _on_worker_chunk(self, content: str, is_thinking: bool):
@@ -628,6 +667,15 @@ class ChatBridge(QObject):
             self._worker = None
             # deleteLater 在事件循环里 GC，比直接 delete 安全
             w.deleteLater()
+        # Day 18 (H1)：worker 退出时计数 -1；若之前 reload 因计数 > 0 被推迟，
+        # 现在重新尝试一次
+        with self._worker_count_lock:
+            self._worker_count = max(0, self._worker_count - 1)
+            pending = self._worker_count == 0 and getattr(self, "_reload_pending", False)
+            if pending:
+                self._reload_pending = False
+        if pending:
+            QTimer.singleShot(0, self._do_reload_plugins)
 
     # ============ Day 11: 工具调用信号桥接 ============
     def _on_worker_tool_call_start(self, name: str, args_str: str):
