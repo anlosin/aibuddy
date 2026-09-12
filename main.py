@@ -22,25 +22,10 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-# 抑制 libpng iCCP 警告（PyQt5 自带图标色彩配置不规范，不影响功能）
+# 抑制 libpng iCCP 警告（Qt 5.15.x 已修复大部分 PNG 警告；warnings.filterwarnings 留作兜底）
 import warnings
 warnings.filterwarnings("ignore", message=".*iCCP.*")
 
-
-class _StderrFilter:
-    """过滤 stderr 中 libpng 的 iCCP 警告"""
-    def __init__(self, real_stderr):
-        self._stderr = real_stderr
-
-    def write(self, s):
-        if "iCCP" not in s and "cHRM" not in s and "sRGB" not in s:
-            self._stderr.write(s)
-
-    def flush(self):
-        self._stderr.flush()
-
-
-sys.stderr = _StderrFilter(sys.stderr)
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtWidgets import QApplication

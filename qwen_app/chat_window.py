@@ -227,8 +227,15 @@ class ChatWindow(QMainWindow):
             self.client = make_openai_client(
                 self.api_key, self.base_url, self.proxy)
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"客户端初始化失败: {e}")
-            sys.exit(1)
+            # Day 18 (L2)：之前 sys.exit(1) 让用户没机会补救
+            # （看不到错误窗口已关、配置也不能改）。改为弹错误框后
+            # self.client = None，用户可点「设置」修配置。
+            QMessageBox.critical(
+                self, "客户端初始化失败",
+                f"无法构建 OpenAI 客户端：\n\n{e}\n\n"
+                "请打开「设置 → 模型」检查 Base URL / API Key 是否正确。"
+            )
+            self.client = None
 
     def _load_settings(self):
         cfg = load_config()

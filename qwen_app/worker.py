@@ -145,10 +145,14 @@ class WorkerThread(QThread):
             delta = chunk.choices[0].delta
 
             # 工具调用累积（跨 chunk 拼接 name / arguments）
-            if self.enable_tools and hasattr(delta, "tool_calls") and delta.tool_calls:
+            # Day 18 (H3)：用 getattr 替代 hasattr+getattr，少一次属性查找；
+            # 真实 OpenAI 响应里 delta 总有 tool_calls 字段（可能为 None），
+            # hasattr 在每 chunk 都失败，纯浪费。
+            tc = getattr(delta, "tool_calls", None)
+            if self.enable_tools and tc:
                 has_tool_calls = True
-                for tc in delta.tool_calls:
-                    idx = tc.index if tc.index is not None else 0
+                for _tc in tc:
+                    idx = _tc.index if _tc.index is not None else 0
                     if idx not in tool_calls_acc:
                         tool_calls_acc[idx] = {
                             "id": "",
@@ -156,13 +160,13 @@ class WorkerThread(QThread):
                             "function": {"name": "", "arguments": ""}
                         }
                     entry = tool_calls_acc[idx]
-                    if tc.id:
-                        entry["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            entry["function"]["name"] += tc.function.name
-                        if tc.function.arguments:
-                            entry["function"]["arguments"] += tc.function.arguments
+                    if _tc.id:
+                        entry["id"] = _tc.id
+                    if _tc.function:
+                        if _tc.function.name:
+                            entry["function"]["name"] += _tc.function.name
+                        if _tc.function.arguments:
+                            entry["function"]["arguments"] += _tc.function.arguments
                 continue
 
             # 内容流处理（带缓冲防标签切割）

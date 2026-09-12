@@ -169,8 +169,11 @@ def markdown_to_html(text, theme="light"):
     text = re.sub(r"^([\-\*+])\s+", "• ", text, flags=re.MULTILINE)
     # 7) 粗体 **x**
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    # 8) 斜体 *x*（仅 * ，避免误伤下划线标识符）
-    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)\*(?!\*)", r"<i>\1</i>", text)
+    # 8) 斜体 *x*（仅 * ，避免误伤下划线标识符 / 加粗残留）
+    # Day 18 (L3)：lookbehind/lookahead 排除前后是 * 的情况
+    # （`***x***` 应被粗体规则先吃掉，留到这里时仅 `*x*` 形态）。
+    # 前一步已经把 `**...**` 转成 `<b>...</b>`，所以这里不需要再排除。
+    text = re.sub(r"(?<!\\)\*(?!\*)(.+?)(?<!\\)\*(?!\*)", r"<i>\1</i>", text)
     # 9) 删除线 ~~x~~
     text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
     # 10) 链接 [t](http...)
