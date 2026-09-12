@@ -476,15 +476,39 @@ class Scheduler:
         return self._max_rounds
 
     def check_due(self, now=None):
-        """检查并启动所有到期任务。可在 QTimer 或阻塞循环中调用。"""
+        """检查并启动所有到期任务。可在 QTimer 或阻塞循环中调用。
+
+        Day 18 (M3)：持锁期间把 (auto_dict, aid) 元组取快照，循环里用
+        元组 + deepcopy 数据 + 立刻把 aid 加入 _running 防并发；线程拿到
+        的 auto 数据从此刻起不再与列表共享，外部对 automations 的更新
+        （delete_automation / update_automation）不会影响本轮执行。
+        """
         now = now or datetime.now()
+        import copy
         with self._lock:
-            due = [a for a in self.automations if is_due(a, now)]
-        for auto in due:
-            aid = auto.get("id")
-            with self._lock:
+            # 1) 拍快照 —— dedup by aid（坏 JSON 可能含重复 id）
+            seen_aids = set()
+            due_snapshot = []
+            for a in self.automations:
+                aid = a.get("id")
+                if not aid or aid in seen_aids:
+                    continue
+                if not is_due(a, now):
+                    continue
+                seen_aids.add(aid)
+                due_snapshot.append((copy.deepcopy(a), aid))
+            # 2) 立刻把全部 aid 加到 _running（仍在锁内：防止 run_now / 并发
+            #    check_due 之间踩同一 aid）
+            for _auto, aid in due_snapshot:
                 if aid in self._running:
-                    continue  # 防重入
+                    # 已有别的线程在跑这个 aid（理论上 dedup 已避免，但保险）
+                    pass
+                else:
+                    self._running.add(aid)
+        # 3) 启动线程
+        for auto, aid in due_snapshot:
+            if aid not in self._running:
+                continue
             t = threading.Thread(
                 target=self._run_one, args=(auto,), daemon=True)
             t.start()
