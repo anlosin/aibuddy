@@ -34,8 +34,8 @@ import threading
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer, QFileSystemWatcher, Qt
 
 from .worker import WorkerThread
-from .theme import markdown_to_html
 from . import config as _config
+from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条路径都走这里）
 
 
 class ChatBridge(QObject):
@@ -644,7 +644,8 @@ class ChatBridge(QObject):
         # Day 10: assistant 消息保存到 SQLite（仅当 who == "ai"，避免错误气泡也保存）
         if who == "ai":
             self._append_history("assistant", buf)
-        rendered = markdown_to_html(buf, self._theme)
+        # A1: 通过 chat_render 抽象层（QtQuick 走 RichText）
+        rendered = chat_render.render_text_final(who, buf, self._theme)
         self.messageReplaced.emit(who, rendered)
 
     def _on_worker_error(self, msg: str):

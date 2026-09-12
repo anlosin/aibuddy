@@ -29,7 +29,8 @@ from .expert_router import (load_experts, match_expert, resolve_settings,
                            build_system_prompt)
 from .automation_dialogs import (AutomationManagerDialog, AutomationEditDialog,
                                  LogViewDialog)
-from .theme import (apply_theme_to_window, build_bubble, get_palette)
+from .theme import (apply_theme_to_window, get_palette)
+from . import chat_render  # A1: 共享渲染抽象层（两条 UI 路径统一）
 from .session import (get_current_conv, new_conversation, on_conv_selected,
                       refresh_conv_list, load_current_conv, save_current_to_conv,
                       load_convs, save_convs, select_conv_by_id, show_conv_menu,
@@ -736,15 +737,16 @@ class ChatWindow(QMainWindow):
         cursor.setPosition(self._block_start_pos)
         cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
         cursor.removeSelectedText()
-        clean = sanitize(self._raw_buffer)
+        clean = chat_render.sanitize_text(self._raw_buffer)
         if clean:
-            cursor.insertHtml(build_bubble(
+            # A1: 通过 chat_render 抽象层（PyQt5 走完整 HTML 气泡）
+            cursor.insertHtml(chat_render.render_html_bubble(
                 self.theme, self._cur_sender, clean, tag, self._cur_time))
         self._scroll_to_bottom()
 
     def _append_text(self, text, tag):
         self._raw_buffer += text
-        # 节流：buffer 增长很便宜，但整块重绘（sanitize + build_bubble + insertHtml）
+        # 节流：buffer 增长很便宜，但整块重绘（sanitize + render_html_bubble + insertHtml）
         # 很贵。用 80ms 单次定时器把多个 chunk 合并成一次渲染，复杂度 O(n²)→O(n)
         if not self._stream_timer.isActive():
             self._stream_timer.start(80)
@@ -815,7 +817,8 @@ class ChatWindow(QMainWindow):
         cursor.movePosition(QTextCursor.End)
         if cursor.position() > 0:
             cursor.insertHtml("<br>")
-        cursor.insertHtml(build_bubble(self.theme, sender, message, tag or "ai", time_str))
+        cursor.insertHtml(chat_render.render_html_bubble(
+            self.theme, sender, message, tag or "ai", time_str))
         self._scroll_to_bottom()
         self.current_tag = None
 
