@@ -36,8 +36,10 @@ SYSTEM_PROMPT = """你拥有在本地机器执行命令和脚本的能力（shel
 # 说明：run_command 保留 shell=True 以支持管道/重定向/内建命令（这是本插件
 # "干活"能力的核心），因此安全边界压缩到黑名单广度。黑名单覆盖越权重命名、
 # 参数变体(-rf/-fr/-r -f)、家目录/敏感绝对路径删除、Windows PowerShell/CMD
-# 递归删除、远程下载执行器等，尽力收缩绕过空间。仍无法穷尽的场景，建议
-# 复杂/危险任务走 run_script 先落盘人工审查再执行。
+# 递归删除、远程下载执行器等，尽力收缩绕过空间。
+# Day 18 (H7) 加固：python -c / powershell -Command / cmd /c 嵌套
+# 执行器也被模型滥用，必须拦截。`for ... do ... & done` 后台并行删除
+# 也是常见绕过，需一并拦截。
 BLOCKED_PATTERNS = [
     # ── rm 递归删除：覆盖 -rf/-fr/-r -f/--recursive 参数变体 + 根/家目录/敏感绝对路径 ──
     r"\brm\b[^\n|&;]*?(?:-\w*[rR]+\w*|--recursive)[^\n|&;]*?[\s\'\"\"]+(/|~|\$\{?HOME\}?)",
@@ -65,6 +67,19 @@ BLOCKED_PATTERNS = [
     # ── 远程下载并执行（curl|wget ... | sh/bash / xargs sh）──
     r"\b(curl|wget)\b[^|\n]*\|\s*(sh|bash|zsh|cmd|powershell)\b",
     r"\bxargs\b[^|\n]*\s(sh|bash|zsh)\b",
+    # ── Day 18 (H7)：拦截嵌套执行器 + 后台并行删除 ──
+    r"\bpython[0-9.]*\s+-c\b[^|\n]*\b(os\.system|subprocess|Popen|__import__|exec|eval)\b",
+    r"\bpython[0-9.]*\s+-c\b[^|\n]*['\"]([^'\"]*\brm\b|.*\bshutdown\b|.*\bmkfs\b|.*\bformat\b)",
+    r"\bnode\s+(-e|--eval)\b",                              # node eval
+    r"\bruby\s+-e\b",                                       # ruby eval
+    r"\bperl\s+-e\b",                                       # perl eval
+    r"\b(powershell|pwsh)\s+(-Command|-C|-EncodedCommand|-E)\b",
+    r"\bcmd\s*\.?exe?\s+/c\b",                              # cmd /c
+    # for/do/done 并行删除（多线程 rm 一个目录）—— 模型常用于"加速"清理
+    r"\bfor\b[^\n]*?\bdo\b[^\n]*?\brm\b[^\n]*?\&\s*(done|$)",
+    r"\bwhile\b[^\n]*?\bdo\b[^\n]*?\brm\b",
+    # xargs -P 并行执行 rm
+    r"\bxargs\b[^\n]*-P[^\n]*\brm\b",
 ]
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
 
