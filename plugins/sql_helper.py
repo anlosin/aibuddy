@@ -341,6 +341,10 @@ def _do_query(args):
     read_only = args.get("read_only", True)
     if isinstance(read_only, str):
         read_only = read_only.lower() in ("1", "true", "yes")
+    # Day 18 (C2 修复)：read_only=True 时双重防护。
+    # 第 1 层：业务层 _has_write_statement() 做关键字检测（早期 fast-fail + 友好提示）；
+    # 第 2 层：连接层开启只读事务（防止字符串分析被绕过 + 驱动层强行拦截写入）。
+    # 两层独立，绕开任一层都会被另一层兜住。
     if read_only and _has_write_statement(sql):
         return ("⛔ 当前为只读模式，已拦截写操作。如需执行，请将 read_only 设为 false"
                 "（并确保你了解风险），或改用数据库管理工具。")
@@ -349,6 +353,19 @@ def _do_query(args):
         return err
     try:
         cur = conn.cursor()
+        # Day 18 修复 C2：底层事务级 readonly（不被字符串分析绕过）
+        if read_only:
+            db_type = (conn.__class__.__module__ + "." + conn.__class__.__name__).lower()
+            try:
+                if "sqlite3" in db_type:
+                    # SQLite 3.8+ PRAGMA query_only，会拒绝 INSERT/UPDATE/DELETE/DROP 等
+                    cur.execute("PRAGMA query_only = ON")
+                elif "mysql" in db_type or "pg8000" in db_type or "psycopg" in db_type:
+                    # MySQL/PostgreSQL：用事务级只读
+                    cur.execute("SET TRANSACTION READ ONLY")
+            except Exception:
+                # 驱动不支持时降级（仍靠 _has_write_statement 业务层兜底）
+                pass
         cur.execute(sql)
         if sql.lower().startswith(("select", "with", "pragma", "show", "explain", "describe")):
             rows = cur.fetchall()
