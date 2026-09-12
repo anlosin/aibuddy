@@ -1027,6 +1027,12 @@ class ChatWindow(QMainWindow):
         except Exception:
             pass
         save_current_to_conv(self)
+        # A3: 显式关闭 SQLite 连接（atexit 兜底，但 GUI 关闭时立即刷盘更稳）
+        try:
+            from . import config as _cfg
+            _cfg.close_all_conns()
+        except Exception:
+            pass
         event.accept()
 
     # ═════════════════════════════════════════

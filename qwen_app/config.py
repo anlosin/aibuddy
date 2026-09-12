@@ -23,6 +23,7 @@ CONVERSATIONS_DB = os.path.join(CONVERSATIONS_DIR, "conversations.db")
 import threading
 _local = threading.local()
 _CONN_LOCK = threading.Lock()
+_all_conns = set()      # A3: 跟踪所有打开的连接（atexit 统一关闭）
 
 
 def _get_db():
@@ -35,7 +36,43 @@ def _get_db():
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")
         _local.conn = db
+        # 跟踪所有打开的连接（atexit 关闭 + 测试清理）
+        _all_conns.add(db)
     return db
+
+
+def close_all_conns():
+    """A3: 关闭所有打开的连接，触发 WAL checkpoint 刷盘。
+
+    应在以下场景调用：
+    - chat_window.closeEvent（GUI 关闭）
+    - scheduler_run.py 退出（独立模式）
+    - atexit（兜底，进程结束一定跑一次）
+    """
+    while _all_conns:
+        db = _all_conns.pop()
+        try:
+            # PRAGMA wal_checkpoint 主动刷 WAL 到主库文件，避免残留
+            try:
+                db.execute("PRAGMA wal_checkpoint(FULL)")
+            except Exception:
+                pass
+            db.commit()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
+    # 清掉所有线程的缓存
+    for tid in list(_local.__dict__.keys()):
+        if tid == "conn":
+            delattr(_local, "conn")
+
+
+# A3: 进程退出兜底关闭（GUI 路径会额外在 closeEvent 调）
+import atexit
+atexit.register(close_all_conns)
 
 
 def init_conversations_db():
