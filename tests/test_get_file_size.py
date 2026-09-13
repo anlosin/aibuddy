@@ -9,7 +9,7 @@ DropArea.onDropped 早期就被拒绝 + 提示，避免后面 read / 编码浪�
 2. 正常文件返回 ok=True 且 size 正确
 3. 不存在的文件 ok=False + error 含"不存在"
 4. 空路径 ok=False
-5. 绝对路径（含 POSIX 风格）被拒（与 read_text_file 路径策略一致）
+5. 绝对路径（Day 19.1 后不再被拒，与 read_text_file 策略一致）
 6. QML 端必须调 bridge.get_file_size()（不再裸用 FileInfo）
 7. >50MB 的文件 QML 端识别为大文件（50MB 上限静态检查）
 """
@@ -75,17 +75,18 @@ class TestGetFileSizeSlot(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("不存在", result["error"])
 
-    def test_absolute_path_rejected(self):
-        """绝对路径（含 POSIX 风格）被拒，与 read_text_file 策略一致"""
-        # Windows 风格
-        win_abs = os.path.join(os.getcwd(), "x.txt")
+    def test_absolute_path_accepted(self):
+        """Day 19.1 修订：GUI 拖入永远是绝对路径，必须能读 + get_file_size。
+        之前的 Day 18 C3 修复（拒绝绝对路径）是错误设计 —— 挡掉了
+        所有合法 GUI 拖入。get_file_size 现在接受绝对路径，仅拒空/不存在。
+        """
+        # Windows 风格绝对路径：应返回 ok=True 或 false（但不能因绝对路径拒）
+        win_abs = os.path.join(os.getcwd(), "nonexistent.txt")
         result = self.bridge.get_file_size(win_abs)
+        # 不存在的绝对路径 → ok=False（"不存在"），但不能是 "绝对路径被拒绝"
         self.assertFalse(result["ok"])
-        self.assertIn("绝对路径被拒绝", result["error"])
-        # POSIX 风格
-        result2 = self.bridge.get_file_size("/etc/passwd")
-        self.assertFalse(result2["ok"])
-        self.assertIn("绝对路径被拒绝", result2["error"])
+        self.assertNotIn("绝对路径", result["error"],
+                          "Day 19.1：绝对路径必须被接受，不能因路径形态拒")
 
     def test_50mb_threshold(self):
         """50MB 上限：正好 50MB 不应被视为过大（> 50MB 才拒）"""
