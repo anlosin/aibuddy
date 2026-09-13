@@ -54,9 +54,25 @@ def close_all_conns():
     - chat_window.closeEvent（GUI 关闭）
     - scheduler_run.py 退出（独立模式）
     - atexit（兜底，进程结束一定跑一次）
+
+    Day 19 (M-NEW-6 修复): 重复调用必须幂等。atexit 在进程退出兜底跑一次，
+    但 chat_window.closeEvent 也调 close_all_conns，顺序不定；如果窗口关
+    闭先跑、随后 atexit 再跑，二次 pop 同一连接 → db.execute(...) 抛
+    sqlite3.ProgrammingError: Cannot operate on a closed database，
+    进程带着 traceback 退出（用户能看到的「闪退」）。修复：先做 "SELECT 1"
+    探活，ProgrammingError 直接 skip。
     """
     while _all_conns:
         db = _all_conns.pop()
+        # Day 19 (M-NEW-6): 探活 + 跳过已关闭连接
+        try:
+            db.execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            # 已关闭（之前 close 过 / set 中残留 stale 引用），跳过
+            continue
+        except Exception:
+            # 其他连接级错误：跳过，避免拖垮整个关闭流程
+            continue
         try:
             # PRAGMA wal_checkpoint 主动刷 WAL 到主库文件，避免残留
             try:
