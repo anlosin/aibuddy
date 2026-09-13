@@ -132,6 +132,43 @@ ApplicationWindow {
                 }
             }
         }
+        // Day 20.1: 补「设置 / 模型 / 自动化」3 组菜单（Day 20 工程师漏补）。
+        // 菜单项调 chat_bridge 5 个新 slot，由 slot 直接 spawn PyQt5 对话框
+        // （settings_dialog / automation_dialogs 在已有 QApplication 进程里能弹）。
+        Menu {
+            title: qsTr("&设置")
+            MenuItem {
+                text: qsTr("模型设置...")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.show_settings_dialog()
+            }
+            MenuItem {
+                text: qsTr("插件管理...")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.show_plugin_manager_dialog()
+            }
+        }
+        Menu {
+            title: qsTr("模&型")
+            MenuItem {
+                text: qsTr("模型管理...")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.show_model_manager_dialog()
+            }
+        }
+        Menu {
+            title: qsTr("&自动化")
+            MenuItem {
+                text: qsTr("任务管理...")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.show_automation_manager_dialog()
+            }
+            MenuItem {
+                text: qsTr("立即检查并执行到期任务")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.run_automation_check_due()
+            }
+        }
         Menu {
             title: qsTr("&帮助")
             MenuItem {

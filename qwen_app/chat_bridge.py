@@ -37,6 +37,7 @@ from .worker import WorkerThread
 from . import config as _config
 from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条路径都走这里）
 from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
+from .settings_dialog import show_settings, show_model_manager, show_plugin_manager  # Day 20.1: QtQuick 调 PyQt5 对话框
 
 
 class ChatBridge(QObject):
@@ -1324,6 +1325,69 @@ class ChatBridge(QObject):
     def _finish_simulate(self):
         self.finalizeLast.emit("ai")
         self._last_who = None
+
+    # ============ Day 20.1: 设置/模型/自动化菜单入口 ============
+    # QtQuick 路径下没有 PyQt5 的菜单栏，Day 20 工程师漏补「设置/模型/自动化」
+    # 三组菜单。PyQt5 对话框（settings_dialog / automation_dialogs）在
+    # 已有 QApplication 进程里也能弹，所以 QML 调这些 slot 时直接 spawn
+    # PyQt5 子窗口 —— 视觉风格略不一致但功能完整。
+    @pyqtSlot()
+    def show_settings_dialog(self):
+        """Day 20.1: QtQuick 菜单栏「设置 > 模型设置」入口"""
+        try:
+            show_settings(self)
+        except Exception as e:
+            print(f"[chat_bridge] show_settings 失败: {e}")
+            self.toast.emit(f"打开设置失败: {e}")
+
+    @pyqtSlot()
+    def show_plugin_manager_dialog(self):
+        """Day 20.1: QtQuick 菜单栏「设置 > 插件管理」入口"""
+        try:
+            show_plugin_manager(self)
+        except Exception as e:
+            print(f"[chat_bridge] show_plugin_manager 失败: {e}")
+            self.toast.emit(f"打开插件管理失败: {e}")
+
+    @pyqtSlot()
+    def show_model_manager_dialog(self):
+        """Day 20.1: QtQuick 菜单栏「模型 > 模型管理」入口"""
+        try:
+            show_model_manager(self)
+        except Exception as e:
+            print(f"[chat_bridge] show_model_manager 失败: {e}")
+            self.toast.emit(f"打开模型管理失败: {e}")
+
+    @pyqtSlot()
+    def show_automation_manager_dialog(self):
+        """Day 20.1: QtQuick 菜单栏「自动化 > 任务管理」入口
+
+        注意：automation_dialogs 当前空模块（line 0），所以这里
+        直接 toast 提示 + 暴露 scheduler.check_due() 立即检查入口。
+        """
+        try:
+            from . import automation_dialogs as ad
+            if hasattr(ad, "show_automation_manager"):
+                ad.show_automation_manager(self)
+            else:
+                # 模块没实现，给个桩
+                self.toast.emit("自动化任务管理 UI 待补完；当前可点「立即检查」")
+        except Exception as e:
+            print(f"[chat_bridge] show_automation_manager 失败: {e}")
+            self.toast.emit(f"打开自动化管理失败: {e}")
+
+    @pyqtSlot()
+    def run_automation_check_due(self):
+        """Day 20.1: QtQuick 菜单栏「自动化 > 立即检查并执行到期任务」入口"""
+        try:
+            if hasattr(self, "_scheduler"):
+                self._scheduler.check_due()
+                self.toast.emit("已触发到期任务检查")
+            else:
+                self.toast.emit("调度器未初始化")
+        except Exception as e:
+            print(f"[chat_bridge] run_automation_check_due 失败: {e}")
+            self.toast.emit(f"检查任务失败: {e}")
 
 
 # ============ 模块级：fake OpenAI client ============
