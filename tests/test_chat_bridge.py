@@ -388,11 +388,13 @@ class TestToolCallBridge(unittest.TestCase):
                 "code": payload.get("code", ""),
             })
         )
-        # 跟踪 tool_call signals
+        # 跟踪 tool_call signals（Day 19.1 修订：toolCallResult 改为 2 参数 + QVariantMap）
         self.tool_started = []
         self.tool_result = []
         self.bridge.toolCallStarted.connect(lambda n, a: self.tool_started.append((n, a)))
-        self.bridge.toolCallResult.connect(lambda n, a, r: self.tool_result.append((n, a, r)))
+        self.bridge.toolCallResult.connect(
+            lambda n, payload: self.tool_result.append((n, payload.get("args"), payload.get("result")))
+        )
 
     def tearDown(self):
         for cid in self.created_ids:

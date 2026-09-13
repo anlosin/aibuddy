@@ -53,10 +53,11 @@ class ChatBridge(QObject):
     sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
     sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
     currentModelNameChanged = pyqtSignal(str)                   # Day 10: 切换模型名名发生变化
-    # Day 11: 工具调用（当前 QML 未用 Connections 监听；若日后要监听，
-    # 3 参数的 toolCallResult 必须先降为 ≤2 参数）
+    # Day 11: 工具调用（Day 19.1 修订：toolCallResult 3 参数触发 QTBUG-94360
+    # 栈越界 —— QML Connections 监听 ≥3 参数信号会在启动期随机 0xC0000005。
+    # 改为 2 参数 + QVariantMap 负载，与 messageAdded 同模板）
     toolCallStarted = pyqtSignal(str, str)                       # (工具名, 参数JSON)
-    toolCallResult = pyqtSignal(str, str, str)                   # (工具名, 参数, 结果)
+    toolCallResult = pyqtSignal(str, 'QVariantMap')             # (工具名, {args, result})
 
     # Day 18: read_text_file 接受的扩展名白名单（C3 安全修复）。
     # 限制为文本/代码/配置/文档类；拒绝二进制、可执行、压缩包、密钥/凭据类。
@@ -976,14 +977,17 @@ class ChatBridge(QObject):
     def _on_worker_tool_call_result(self, name: str, args_str: str, result: str):
         """WorkerThread.tool_call_result → QML 显示工具结果气泡
 
-        推到 messageModel（who="tool_result"，text=name，code=result）
+        推到 messageModel（who="tool_result"，text=name，code=result_display）
+        同时 emit toolCallResult(name, {args, result}) 给 QML 端可能要做的特殊处理。
         """
         from datetime import datetime as _dt
         ts = _dt.now().strftime("%H:%M")
         # 截断过长结果（避免气泡爆长）
         result_display = result if len(result) <= 800 else (result[:800] + "\n... (已截断)")
         self.messageAdded.emit("tool_result", self._mk_msg(name, ts, result_display))
-        self.toolCallResult.emit(name, args_str, result)
+        # Day 19.1 修订：toolCallResult 改为 (name, QVariantMap) ≤2 参数，
+        # 防 QTBUG-94360（QML Connections 监听 ≥3 参数信号栈越界崩溃）。
+        self.toolCallResult.emit(name, {"args": args_str, "result": result})
 
     # ============ Day 1-2 兼容：旧 mock 路径（保留但默认不用）============
     def _simulate_ai_reply(self, prompt: str):
