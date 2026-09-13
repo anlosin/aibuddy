@@ -36,6 +36,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer, QF
 from .worker import WorkerThread
 from . import config as _config
 from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条路径都走这里）
+from ._safe_path import is_safe_relative  # Day 19: 路径安全检查（DRY）
 
 
 class ChatBridge(QObject):
@@ -310,8 +311,8 @@ class ChatBridge(QObject):
             return text
         blocks = [{"type": "text", "text": text}]
         for path in image_paths:
-            # 路径安全检查（与 read_text_file 一致）
-            if not path or os.path.isabs(path) or path.startswith("/"):
+            # 路径安全检查（与 read_text_file 一致；Day 19 抽到 _safe_path）
+            if not is_safe_relative(path):
                 print(f"[chat_bridge] 图片路径拒绝（绝对路径）: {path}")
                 continue
             lower = path.lower()
@@ -578,7 +579,7 @@ class ChatBridge(QObject):
             return out
         # Day 19 (H-NEW-8): 拒绝对对路径（与 read_text_file 一致；
         # 拖入是 file:// URL，Qt 会做 toLocalFile，但兜底防 LLM 拼字符串）
-        if os.path.isabs(file_path) or file_path.startswith("/"):
+        if not is_safe_relative(file_path):
             out["error"] = "绝对路径被拒绝"
             return out
         try:
@@ -619,10 +620,8 @@ class ChatBridge(QObject):
         """
         if not file_path:
             return ""
-        # C3 修复：拒绝绝对路径
-        # 跨平台绝对路径：os.path.isabs 在 Windows 不认 /etc/passwd 这种 POSIX 风格；
-        # Qt 拖入文件用 file:/// URL 是 POSIX 风格，必须额外判断
-        if os.path.isabs(file_path) or file_path.startswith("/"):
+        # C3 修复：拒绝绝对路径（Day 19 抽到 _safe_path 统一处理）
+        if not is_safe_relative(file_path):
             return ("[读文件失败: 不支持绝对路径（仅允许读取程序工作目录内的文本文件）]")
         # C3 修复：扩展名白名单
         lower = file_path.lower()
