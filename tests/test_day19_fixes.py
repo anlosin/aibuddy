@@ -188,5 +188,91 @@ class TestSshRunnerCwdQuoting(unittest.TestCase):
                           "H-NEW-1：旧版 cwd 字符串格式化必须删除（命令注入）")
 
 
+class TestChatBridgePluginState(unittest.TestCase):
+    """C-NEW-2: _enabled_plugin_names 必须从 cfg 持久化读，不再硬编码。"""
+
+    def test_reads_from_persisted_plugin_state(self):
+        from qwen_app import chat_bridge
+        with open(chat_bridge.__file__, encoding="utf-8") as f:
+            src = f.read()
+        # _enabled_plugin_names 必须调 load_plugin_state
+        import ast
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_enabled_plugin_names":
+                block = ast.get_source_segment(src, node)
+                self.assertIn("load_plugin_state", block,
+                              "C-NEW-2：_enabled_plugin_names 必须从持久化 enabled_plugins 字段读")
+                return
+        self.fail("找不到 _enabled_plugin_names")
+
+
+class TestChatBridgeExpertIntegration(unittest.TestCase):
+    """C-NEW-3: chat_bridge 必须集成 expert_router（专家前缀 + system_prompt 注入）。"""
+
+    def test_uses_match_expert(self):
+        from qwen_app import chat_bridge
+        with open(chat_bridge.__file__, encoding="utf-8") as f:
+            src = f.read()
+        # send_message 必须 import match_expert
+        import ast
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "send_message":
+                block = ast.get_source_segment(src, node)
+                self.assertIn("match_expert", block,
+                              "C-NEW-3：send_message 必须调 match_expert 处理 /dev 前缀")
+                return
+        self.fail("找不到 send_message")
+
+    def test_uses_build_system_prompt(self):
+        from qwen_app import chat_bridge
+        with open(chat_bridge.__file__, encoding="utf-8") as f:
+            src = f.read()
+        # 必须有 _build_system_prompt 方法 + 调 expert_router.build_system_prompt
+        self.assertIn("def _build_system_prompt", src,
+                      "C-NEW-3：必须有 _build_system_prompt 方法")
+        import ast
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_build_system_prompt":
+                block = ast.get_source_segment(src, node)
+                self.assertIn("build_system_prompt", block,
+                              "_build_system_prompt 必须调 expert_router.build_system_prompt")
+                return
+        self.fail("找不到 _build_system_prompt")
+
+    def test_start_real_chat_takes_system_prompt(self):
+        from qwen_app import chat_bridge
+        with open(chat_bridge.__file__, encoding="utf-8") as f:
+            src = f.read()
+        # start_real_chat 签名必须含 system_prompt 参数
+        import ast
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "start_real_chat":
+                args = [a.arg for a in node.args.args]
+                self.assertIn("system_prompt", args,
+                              "C-NEW-3：start_real_chat 必须接 system_prompt 参数")
+                return
+        self.fail("找不到 start_real_chat")
+
+    def test_has_set_expert_and_list_experts_slots(self):
+        from qwen_app import chat_bridge
+        # QML 端下拉框切专家需要的 slot
+        self.assertTrue(hasattr(chat_bridge.ChatBridge, "set_expert"),
+                        "C-NEW-3：必须有 set_expert slot")
+        self.assertTrue(hasattr(chat_bridge.ChatBridge, "list_experts"),
+                        "C-NEW-3：必须有 list_experts slot")
+
+    def test_default_expert_is_general(self):
+        from PyQt5.QtWidgets import QApplication
+        from qwen_app.chat_bridge import ChatBridge
+        app = QApplication.instance() or QApplication(sys.argv)
+        b = ChatBridge(theme="light")
+        # 初始默认专家
+        self.assertEqual(b._current_expert_id, "general")
+
+
 if __name__ == "__main__":
     unittest.main()

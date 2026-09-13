@@ -141,6 +141,9 @@ class ChatBridge(QObject):
         except Exception:
             self._enable_thinking = False
             self._enable_tools = True
+        # Day 19 (C-NEW-3 修复): 当前激活的专家（默认 "general"）。
+        # 用户在 QML 端通过 set_expert 切换；/dev 前缀路由会临时改
+        self._current_expert_id = "general"
         # Day 14: 插件热更新 watcher
         self._plugin_watcher = None
         # Day 8: 当前会话 ID（main.py 启动日志读这个）
@@ -200,10 +203,73 @@ class ChatBridge(QObject):
             self.appendError.emit("system", "正在生成中，请稍候")
             return
         text = text.strip()
+        # Day 19 (C-NEW-3 修复): 专家前缀路由（/dev、/analyst 等）
+        # 与 chat_window.on_send_message 一致
+        try:
+            from .expert_router import match_expert, build_system_prompt
+            from . import config as _cfg
+            experts = _cfg.load_experts() if hasattr(_cfg, "load_experts") else self._load_experts()
+            matched_id, stripped = match_expert(text, experts)
+            if matched_id:
+                self._current_expert_id = matched_id
+                if stripped:
+                    text = stripped
+        except Exception:
+            pass
         self._send_user_bubble(text)
         # Day 14: 构建 multimodal content（如果有图片附件）
         user_content = self._build_user_content(text, image_paths or [])
-        self.start_real_chat(user_text=text, use_fake=use_fake, user_content=user_content)
+        # Day 19: 构建 system_prompt（专家 + 插件 skill + 工具引导）
+        # 与 chat_window.on_send_message 一致
+        system_prompt = self._build_system_prompt()
+        self.start_real_chat(
+            user_text=text,
+            use_fake=use_fake,
+            user_content=user_content,
+            system_prompt=system_prompt,
+        )
+
+    def _load_experts(self):
+        """Day 19: 懒加载 experts 字典。"""
+        try:
+            from .expert_router import load_experts
+            return load_experts()
+        except Exception:
+            return {}
+
+    def _build_system_prompt(self) -> str:
+        """Day 19 (C-NEW-3 修复): 与 chat_window.on_send_message 一致构造
+        专家 + 插件 skill + 工具引导。
+
+        返回空字符串（而非 None）— 避免 start_real_chat 把它当 None 处理。
+        """
+        try:
+            from .expert_router import build_system_prompt, resolve_settings
+            from . import config as _cfg
+            experts = self._load_experts()
+            eid = getattr(self, "_current_expert_id", "general")
+            if eid not in experts:
+                eid = "general"
+            expert = experts.get(eid, {})
+            # 全局偏好
+            enable_thinking = getattr(self, "_enable_thinking", False)
+            enable_tools = getattr(self, "_enable_tools", True)
+            # 插件列表（与 _enabled_plugin_names 一致）
+            from . import plugin_manager
+            plugins, _ = plugin_manager.discover_plugins()
+            enabled = self._enabled_plugin_names()
+            # 沿用 chat_window 的设置（max_rounds=3 与 QtQuick 路径固定值匹配）
+            ep, use_tools, use_thinking, rounds = resolve_settings(
+                expert, enabled, enable_tools, enable_thinking,
+                False, 3,  # agent_mode 暂不开，max_rounds=3
+            )
+            if ep or (expert.get("system_prompt") or "").strip():
+                agent_on = False
+                sp = build_system_prompt(expert, plugins, ep, use_tools, agent_mode=agent_on)
+                return sp or ""
+        except Exception:
+            pass
+        return ""
 
     # Day 19 (C-NEW-4 修复): 图片附件白名单 + 路径校验
     # 防止 LLM 通过 QML DropArea 拖入任意路径的 4MB 内文件（如
@@ -455,6 +521,36 @@ class ChatBridge(QObject):
             "enable_tools": getattr(self, "_enable_tools", True),
         }
 
+    @pyqtSlot(str, result=bool)
+    def set_expert(self, expert_id: str) -> bool:
+        """Day 19 (C-NEW-3 修复): 切到指定专家。成功返回 True。
+
+        QML 端下拉框选专家时调此 slot；/dev 前缀路由也会调。
+        """
+        experts = self._load_experts()
+        if expert_id in experts:
+            self._current_expert_id = expert_id
+            return True
+        return False
+
+    @pyqtSlot(result='QVariantList')
+    def list_experts(self):
+        """Day 19 (C-NEW-3 修复): 返回所有专家的元信息（QML 端下拉框用）。
+
+        格式: [{id, name, description, current}, ...]
+        """
+        experts = self._load_experts()
+        out = []
+        cur = getattr(self, "_current_expert_id", "general")
+        for eid, e in experts.items():
+            out.append({
+                "id": eid,
+                "name": e.get("name", eid),
+                "description": e.get("description", ""),
+                "current": eid == cur,
+            })
+        return out
+
     @pyqtSlot(str, result=str)
     def read_text_file(self, file_path: str) -> str:
         """Day 13: 读文本文件内容（拖入文本文件时附加到输入框用）
@@ -563,12 +659,19 @@ class ChatBridge(QObject):
     def _enabled_plugin_names(self) -> list:
         """Day 13: 列出已启用插件名（带 TOOLS 字段的）
 
-        简化版：所有定义了 TOOLS 的插件都视为启用（PyQt5 主线从 settings 读）。
+        Day 19 (C-NEW-2 修复)：从 cfg 持久化的 enabled_plugins 字段读，
+        与 chat_window._load_plugins 一致 —— 之前是「所有 TOOLS 插件视为启用」，
+        QtQuick 路径下用户在「插件管理」里禁用某个插件完全无效。
         """
         try:
+            from . import config as _cfg
             from . import plugin_manager
+            # 读持久化的启用列表（load_plugin_state 已在 user 排除不存在的）
+            saved = _cfg.load_plugin_state()
             plugins, _ = plugin_manager.discover_plugins()
-            return [n for n, m in plugins.items() if hasattr(m, "TOOLS") and m.TOOLS]
+            # 取交集：磁盘上存在 + 标记启用 + 实际有 TOOLS
+            return [n for n in saved
+                    if n in plugins and hasattr(plugins[n], "TOOLS") and plugins[n].TOOLS]
         except Exception:
             return []
 
@@ -614,7 +717,8 @@ class ChatBridge(QObject):
 
 
     # ============ Day 3-5: 真实流式（用 fake OpenAI client 跑真 WorkerThread）============
-    def start_real_chat(self, user_text: str, use_fake: bool = False, user_content=None):
+    def start_real_chat(self, user_text: str, use_fake: bool = False, user_content=None,
+                        system_prompt: str = ""):
         """Day 9: 启动一个真 WorkerThread。client 优先从 config 读取：
         - 能读到 api_key/base_url → 用真 LLM则实际发 HTTP 请求。会耗 token。
         - 读不到 / 错误 → 降级到 fake client（验证信号链路用）。
@@ -629,6 +733,10 @@ class ChatBridge(QObject):
           硬编码 "mock-qwen"
         - enable_thinking / enable_tools 从 self._enable_thinking / tools
           读（这些是用户在「偏好设置」里设的全局偏好；启动时从 cfg 顶层读）
+
+        Day 19 (C-NEW-3 修复)：
+        - system_prompt 是 send_message 构造的（专家 + 插件 skill + 工具引导），
+          在这里注入到 messages 第一条。空字符串则不注入。
         """
         client = None
         model_name = "未选择"
@@ -671,7 +779,15 @@ class ChatBridge(QObject):
             model_id=real_model_id,
             enable_thinking=real_enable_thinking,
             enable_tools=real_enable_tools,
-            messages=[{"role": "user", "content": (user_content if user_content is not None else user_text)}],
+            # Day 19 (C-NEW-3 修复): system_prompt（来自专家/插件/工具引导）
+            # 插在 messages 第一条。chat_window 路径在 on_send_message 也会插；
+            # QtQuick 路径之前完全没插。
+            messages=(
+                [{"role": "system", "content": system_prompt}] +
+                [{"role": "user", "content": (user_content if user_content is not None else user_text)}]
+                if system_prompt else
+                [{"role": "user", "content": (user_content if user_content is not None else user_text)}]
+            ),
             plugins=self._discover_plugins(),
             enabled_plugins=self._enabled_plugin_names(),
             max_rounds=3,                 # 最多 3 轮工具调用循环
