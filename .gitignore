@@ -42,9 +42,12 @@ scripts/push.py
 scripts/migrate_conversations.py
 
 # ===== 调试残留文件（编辑器/agent runtime 产生） =====
-# 8 字符 base36 名 + 4 字节 b'blat' 等临时工件（来自 WorkBuddy agent runtime）
-????????.????
-????????
+# 8 字符 base36 + 下划线 mkstemp 文件（如 01fmyin9 / _kbiz57x —— 注意：
+# gitignore 的 ? 是「任意 1 字符」通配符，所以不能用 ????????，
+# 否则 qwen_app / messages 之类的 8 字符合法文件名都会被误伤）。
+# 用字符类精确匹配 base36 + 下划线）
+[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
+[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
 _tmp_test_*.txt
 _t.txt
 _t2.txt

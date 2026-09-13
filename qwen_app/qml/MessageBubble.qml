@@ -131,7 +131,9 @@ Rectangle {
         anchors.leftMargin: 4
         // 头像不挡时永远显示；user 气泡头像挡则隐藏
         visible: bubble.isUser ? false : true
-        opacity: moreMa.containsMouse || bubbleMenu.opened ? 1.0 : 0.0
+        // Day 19.1 修复（类比 drop bug 教训）：默认 opacity=1.0 永远可见。
+        // hover/opened 时变深（仍然有视觉反馈），但不再依赖 hover 才出现。
+        opacity: moreMa.containsMouse || bubbleMenu.opened ? 1.0 : 0.7
         Behavior on opacity { NumberAnimation { duration: 150 } }
         color: moreMa.containsMouse ? Qt.rgba(0, 0, 0, 0.10) : Qt.rgba(0, 0, 0, 0.05)
         z: 5
