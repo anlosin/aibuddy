@@ -353,19 +353,24 @@ def _do_query(args):
         return err
     try:
         cur = conn.cursor()
-        # Day 18 修复 C2：底层事务级 readonly（不被字符串分析绕过）
-        if read_only:
-            db_type = (conn.__class__.__module__ + "." + conn.__class__.__name__).lower()
-            try:
-                if "sqlite3" in db_type:
-                    # SQLite 3.8+ PRAGMA query_only，会拒绝 INSERT/UPDATE/DELETE/DROP 等
-                    cur.execute("PRAGMA query_only = ON")
-                elif "mysql" in db_type or "pg8000" in db_type or "psycopg" in db_type:
-                    # MySQL/PostgreSQL：用事务级只读
-                    cur.execute("SET TRANSACTION READ ONLY")
-            except Exception:
-                # 驱动不支持时降级（仍靠 _has_write_statement 业务层兜底）
-                pass
+        db_type = (conn.__class__.__module__ + "." + conn.__class__.__name__).lower()
+        # Day 19.1.1 (query_only 状态泄漏修复):
+        # PRAGMA query_only 是连接级状态。上一次 read_only=True 设的 ON 会留在
+        # 缓存连接上，下次 read_only=False 仍被拒 → INSERT/UPDATE 静默失败。
+        # 现在每次调用先显式重置本次目标状态，不论连接历史如何都确定。
+        # MySQL/PostgreSQL：read_only=True 用 SET TRANSACTION READ ONLY，
+        # read_only=False 不需要显式重置（事务默认非只读，新 cur 也不继承）。
+        try:
+            if "sqlite3" in db_type:
+                # SQLite 3.8+ PRAGMA query_only，会拒绝 INSERT/UPDATE/DELETE/DROP 等
+                cur.execute("PRAGMA query_only = ON" if read_only else "PRAGMA query_only = OFF")
+            elif read_only and ("mysql" in db_type or "pg8000" in db_type or "psycopg" in db_type):
+                # MySQL/PostgreSQL：read_only=True 时用事务级只读
+                # read_only=False 不发任何 SQL（新 cursor 默认非只读）
+                cur.execute("SET TRANSACTION READ ONLY")
+        except Exception:
+            # 驱动不支持时降级（仍靠 _has_write_statement 业务层兜底）
+            pass
         cur.execute(sql)
         if sql.lower().startswith(("select", "with", "pragma", "show", "explain", "describe")):
             # Day 19 (H-NEW-3 修复): 用 fetchmany(ROW_LIMIT + 1) 增量拉，
