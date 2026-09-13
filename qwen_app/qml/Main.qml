@@ -815,6 +815,8 @@ ApplicationWindow {
                                     text: text
                                     hasCode: hasCode
                                     code: hasCode ? code : ""
+                                    // Day 20: 注入 ListView.index（delegate 上下文属性）到气泡
+                                    msgIndex: index
                                     Layout.preferredWidth: 680
                                 }
                                 Item {
