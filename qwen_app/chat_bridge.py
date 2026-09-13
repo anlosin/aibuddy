@@ -560,6 +560,17 @@ class ChatBridge(QObject):
             })
         return out
 
+    @pyqtSlot(result='QVariantList')
+    def list_readable_ext(self):
+        """Day 19 (M-NEW-4): 暴露 _READABLE_EXT 白名单给 QML。
+
+        之前 QML 端 DropArea.onDropped 自己维护了一份 textExts 数组，与
+        Python _READABLE_EXT 重复；任何一处扩展白名单都得手动同步两边，
+        容易漂移。现在统一以 Python 为单一来源，QML 通过本 slot 拉取。
+        返回纯字符串列表（含点前缀），QML 端用 endsWith(ext) 判断。
+        """
+        return list(self._READABLE_EXT)
+
     @pyqtSlot(str, result=str)
     def read_text_file(self, file_path: str) -> str:
         """Day 13: 读文本文件内容（拖入文本文件时附加到输入框用）

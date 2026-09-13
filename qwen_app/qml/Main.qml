@@ -655,9 +655,10 @@ ApplicationWindow {
                                             fileAttachments = newAtts
                                             inputField.text += (inputField.text ? "\n" : "") + "[\u56fe\u7247] " + filePath
                                         } else if (bridge) {
-                                            const textExts = [".txt", ".md", ".py", ".js", ".ts", ".json", ".log",
-                                                               ".html", ".css", ".sh", ".yml", ".yaml", ".xml",
-                                                               ".sql", ".java", ".go", ".rs", ".cpp", ".c", ".h"]
+                                            // Day 19 (M-NEW-4 修复): 文本扩展名白名单
+                                            // 改为从 bridge.list_readable_ext() 拉取（Python
+                                            // 端 _READABLE_EXT 的单一来源），避免双份维护漂移
+                                            const textExts = bridge.list_readable_ext()
                                             const isText = textExts.some(function(e) { return lower.endsWith(e) })
                                             if (isText) {
                                                 const content = bridge.read_text_file(filePath)
