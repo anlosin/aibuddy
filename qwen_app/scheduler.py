@@ -652,8 +652,11 @@ class Scheduler:
     # ── 任务增删改（供 UI 调用）──
     def add_automation(self, name, prompt, schedule, enabled=True, max_rounds=None,
                        model_id=""):
+        # Day 19.1.1: 使用完整 UUID（36 字符）与 acb80e5 对齐
+        # 12-char hex 仅 48 bits 熵，automaion 数量较少碰撞概率低，
+        # 但与 session.py / chat_bridge.py 一致更安全。
         auto = {
-            "id": uuid.uuid4().hex[:12],
+            "id": str(uuid.uuid4()),
             "name": name,
             "prompt": prompt,
             "schedule": schedule,
