@@ -991,8 +991,10 @@ class ChatWindow(QMainWindow):
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                # Day 19.1.1: 与 chat_bridge.create_session 对齐，使用完整 UUID（36 字符）
+                # 防 8-char 截断碰撞。详见 chat_bridge.create_session 注释。
                 conv = {
-                    "id": str(uuid.uuid4())[:8],
+                    "id": str(uuid.uuid4()),
                     "title": data.get("title", "导入的对话"),
                     "history": data.get("history", []),
                     "created_at": data.get("timestamp", datetime.now().isoformat()),

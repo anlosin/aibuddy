@@ -398,11 +398,18 @@ class ChatBridge(QObject):
 
     @pyqtSlot(str, result=str)
     def create_session(self, title="新对话"):
-        """创建新会话，返回新 id；同时设为当前会话"""
+        """创建新会话，返回新 id；同时设为当前会话
+
+        Day 19.1.1: 使用完整 UUID（36 字符）而非 8 字符截断。
+        8 字符 hex 仅 32 bits 熵（约 4B 种可能），约 65k 个 session
+        就有 50% 碰撞概率。完整 UUID v4 有 122 bits 熵，碰撞概率
+        实际为零。SQLite 主键为 TEXT 无长度限制，QML 侧边栏显示
+        model.name（不是 model.id），无显示侧影响。
+        """
         import uuid as _uuid
         from datetime import datetime as _dt
         new_conv = {
-            "id": str(_uuid.uuid4())[:8],
+            "id": str(_uuid.uuid4()),
             "title": title or "新对话",
             "history": [],
             "created_at": _dt.now().isoformat(),

@@ -29,8 +29,10 @@ def get_current_conv(window):
 
 
 def new_conversation(window):
+    # Day 19.1.1: 使用完整 UUID（36 字符）防 8-char 截断碰撞
+    # 与 chat_bridge.create_session、chat_window.import_conversation 对齐
     conv = {
-        "id": str(uuid.uuid4())[:8],
+        "id": str(uuid.uuid4()),
         "title": "新对话",
         "history": [],
         "created_at": datetime.now().isoformat(),

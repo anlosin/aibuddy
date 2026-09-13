@@ -136,7 +136,10 @@ class TestSessionManagement(unittest.TestCase):
         new_id = self.bridge.create_session("Day 8 unit test")
         self.created_ids.append(new_id)
         self.assertTrue(new_id)
-        self.assertEqual(len(new_id), 8)  # uuid4 hex[:8]
+        # Day 19.1.1: 必须使用完整 UUID（36 字符含 dash）防碰撞
+        # 之前 [:8] 仅 32 bits 熵，约 65k 个 session 50% 碰撞
+        self.assertEqual(len(new_id), 36, f"应为完整 UUID 36 字符，实际 {len(new_id)}: {new_id!r}")
+        self.assertIn("-", new_id, "UUID 格式应含 dash")
         # 重新查应该能找到
         sessions = self.bridge.list_sessions()
         ids = [s["id"] for s in sessions]
@@ -145,6 +148,38 @@ class TestSessionManagement(unittest.TestCase):
         created = next(s for s in sessions if s["id"] == new_id)
         self.assertEqual(created["name"], "Day 8 unit test")
         self.assertTrue(created["sel"])  # 新创建的应该是当前会话
+
+    def test_create_session_id_is_full_uuid(self):
+        """Day 19.1.1: session id 必须是完整 UUID（防碰撞）。"""
+        import uuid as _u
+        cid = self.bridge.create_session("Day 19.1.1 UUID test")
+        self.created_ids.append(cid)
+        # UUID v4 标准格式：8-4-4-4-12 = 36 字符
+        self.assertEqual(len(cid), 36, f"应为完整 UUID 36 字符，实际 {len(cid)}: {cid!r}")
+        self.assertIn("-", cid)
+        # 应当能解析回 UUID 对象（说明格式合规）
+        parsed = _u.UUID(cid)
+        self.assertEqual(parsed.version, 4, "应为 UUID v4")
+        # 多次创建必须不碰撞
+        ids = set()
+        for _ in range(100):
+            new_id = self.bridge.create_session("collision-test")
+            self.created_ids.append(new_id)
+            self.assertNotIn(new_id, ids, f"100 次创建出现碰撞: {new_id!r}")
+            ids.add(new_id)
+
+    def test_session_id_round_trips_through_db(self):
+        """Day 19.1.1: 完整 UUID 必须能完整保存到 SQLite 并读回
+        （C1 修复已保证 session_state TEXT 不截断）。"""
+        from qwen_app import config as _cfg
+        cid = self.bridge.create_session("持久化测试")
+        self.created_ids.append(cid)
+        # 直接读 SQLite 验证存的就是完整 UUID（36 字符）
+        convs, current_id = _cfg.load_conversations()
+        # current_id 可能被别处改了，但写入 conversations 表必须是完整 UUID
+        stored = next((c for c in convs if c["id"] == cid), None)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored["id"], cid, "DB 中的 id 必须 == 创建时的完整 UUID")
 
     def test_create_emits_session_list_changed(self):
         """create_session 应该 emit sessionListChanged"""
