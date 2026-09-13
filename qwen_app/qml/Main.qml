@@ -9,6 +9,258 @@ ApplicationWindow {
     height: 760
     title: "aibuddy (QtQuick Day 1-2 Demo)"
 
+    // ===== Day 20: 顶部 MenuBar（文件 / 编辑 / 视图 / 聊天 / 帮助）=====
+    // 所有 action 走 bridge.* slot —— 已经在 chat_bridge.py 实现
+    // 不引入新 QObject 局部变量（避免保活坑）
+    // 所有 MenuItem enabled 都做 bridge 注入守卫（H5 教训）
+    menuBar: MenuBar {
+        Menu {
+            title: qsTr("&文件")
+            MenuItem {
+                text: qsTr("新对话\tCtrl+N")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.create_session("新对话")
+            }
+            MenuItem {
+                text: qsTr("导出当前会话...")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: {
+                    if (!bridge) return
+                    // 用一个虚拟索引调用 share_bubble 不合适；改成逐条导出
+                    // 这里简化为：把所有 ai 气泡都导出到一个 markdown
+                    var hist = bridge.list_sessions()
+                    if (hist.length === 0) return
+                    bridge.toast("请用气泡三点菜单的「分享」逐条导出")
+                }
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("退出")
+                onTriggered: Qt.quit()
+            }
+        }
+        Menu {
+            title: qsTr("&编辑")
+            MenuItem {
+                text: qsTr("清空消息\tCtrl+L")
+                enabled: bridge !== undefined && bridge !== null && !inputField.activeFocus
+                onTriggered: messageModel.clear()
+            }
+            MenuItem {
+                text: qsTr("查找\tCtrl+F")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.toast("查找功能开发中")
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("复制最后一条 AI 回答")
+                enabled: bridge !== undefined && bridge !== null && messageModel.count > 0
+                onTriggered: {
+                    if (!bridge) return
+                    // 找最后一个 ai 气泡
+                    var last = ""
+                    for (var i = messageModel.count - 1; i >= 0; i--) {
+                        var it = messageModel.get(i)
+                        if (it.who === "ai") {
+                            last = it.text
+                            break
+                        }
+                    }
+                    if (last) bridge.copy_to_clipboard(last)
+                    else bridge.toast("没有 AI 回答可复制")
+                }
+            }
+        }
+        Menu {
+            title: qsTr("&视图")
+            MenuItem {
+                text: qsTr("切换主题\tCtrl+T")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
+            }
+        }
+        Menu {
+            title: qsTr("&聊天")
+            MenuItem {
+                text: qsTr("重新生成最后一条 AI 回答")
+                enabled: bridge !== undefined && bridge !== null && !bridge.isBusy && messageModel.count > 0
+                onTriggered: {
+                    if (!bridge) return
+                    var lastAi = -1
+                    for (var i = messageModel.count - 1; i >= 0; i--) {
+                        if (messageModel.get(i).who === "ai") {
+                            lastAi = i
+                            break
+                        }
+                    }
+                    if (lastAi >= 0) {
+                        bridge.regenerate_ai_response(lastAi)
+                    } else {
+                        bridge.toast("没有 AI 回答可重新生成")
+                    }
+                }
+            }
+            MenuItem {
+                text: qsTr("停止生成\tEsc")
+                enabled: bridge !== undefined && bridge !== null && bridge.isBusy
+                onTriggered: if (bridge) bridge.stop_chat()
+            }
+            MenuItem {
+                text: qsTr("朗读最后一条 AI 回答")
+                enabled: bridge !== undefined && bridge !== null && messageModel.count > 0
+                onTriggered: {
+                    if (!bridge) return
+                    var last = ""
+                    for (var i = messageModel.count - 1; i >= 0; i--) {
+                        var it = messageModel.get(i)
+                        if (it.who === "ai") {
+                            last = it.text
+                            break
+                        }
+                    }
+                    if (last) bridge.speak_text(last)
+                }
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("删除最后一条消息")
+                enabled: bridge !== undefined && bridge !== null && messageModel.count > 0
+                onTriggered: {
+                    if (!bridge) return
+                    var idx = messageModel.count - 1
+                    bridge.delete_bubble(idx)
+                }
+            }
+        }
+        Menu {
+            title: qsTr("&帮助")
+            MenuItem {
+                text: qsTr("快捷键")
+                onTriggered: helpPopup.open()
+            }
+            MenuItem {
+                text: qsTr("关于 aibuddy")
+                onTriggered: aboutPopup.open()
+            }
+        }
+    }
+
+    // Day 20: 提示弹窗（菜单 / 三点菜单触发）
+    Popup {
+        id: helpPopup
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 420
+        height: 280
+        modal: true
+        focus: true
+        contentItem: ColumnLayout {
+            spacing: 8
+            Text {
+                text: "快捷键"
+                font.pixelSize: 16
+                font.bold: true
+                color: root.pal.textPrimary
+                Layout.fillWidth: true
+            }
+            Text {
+                text: "Enter         发送消息\nShift+Enter   换行\nEsc           停止生成\nCtrl+L        清空消息\nCtrl+N        新对话\nCtrl+T        切换主题\nCtrl+K        停止生成（同 Esc）"
+                font.pixelSize: 13
+                color: root.pal.textPrimary
+                Layout.fillWidth: true
+            }
+            Item { Layout.fillHeight: true }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                radius: 6
+                color: closeHelpMa.containsMouse ? root.pal.sendBtnHover : root.pal.sendBtn
+                Text { anchors.centerIn: parent; text: "关闭"; color: "white"; font.bold: true }
+                MouseArea {
+                    id: closeHelpMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: helpPopup.close()
+                }
+            }
+        }
+    }
+    Popup {
+        id: aboutPopup
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 380
+        height: 200
+        modal: true
+        focus: true
+        contentItem: ColumnLayout {
+            spacing: 8
+            Text {
+                text: "aibuddy"
+                font.pixelSize: 20
+                font.bold: true
+                color: root.pal.textPrimary
+                Layout.fillWidth: true
+            }
+            Text {
+                text: "QtQuick AI 对话助手 · Day 20"
+                font.pixelSize: 13
+                color: root.pal.textSecondary
+                Layout.fillWidth: true
+            }
+            Text {
+                text: "气泡操作：复制 / 删除 / 编辑 / 重新生成\n引用回复 / TTS 朗读 / 分享导出"
+                font.pixelSize: 12
+                color: root.pal.textTertiary
+                Layout.fillWidth: true
+            }
+            Item { Layout.fillHeight: true }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                radius: 6
+                color: closeAboutMa.containsMouse ? root.pal.sendBtnHover : root.pal.sendBtn
+                Text { anchors.centerIn: parent; text: "关闭"; color: "white"; font.bold: true }
+                MouseArea {
+                    id: closeAboutMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: aboutPopup.close()
+                }
+            }
+        }
+    }
+
+    // Day 20: toast 提示（非阻塞，1.5s 自动消失）
+    Rectangle {
+        id: toastBox
+        property string msg: ""
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottomMargin: 110
+        radius: 8
+        color: Qt.rgba(0.12, 0.12, 0.16, 0.92)
+        width: Math.min(420, toastText.implicitWidth + 32)
+        height: toastText.implicitHeight + 20
+        opacity: msg.length > 0 ? 0.95 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+        Text {
+            id: toastText
+            anchors.centerIn: parent
+            text: toastBox.msg
+            color: "white"
+            font.pixelSize: 13
+        }
+        Timer {
+            id: toastTimer
+            interval: 1500
+            onTriggered: toastBox.msg = ""
+        }
+    }
+
     // 主题切换：light / dark
     property string themeName: bridge ? bridge.get_theme() : "light"
 
@@ -204,6 +456,27 @@ ApplicationWindow {
         // 主题切换
         function onThemeChanged(name) {
             root.themeName = name
+        }
+        // Day 20: 气泡删除（bridge.delete_bubble 触发，QML 同步移除）
+        function onBubbleDeleted(idx) {
+            if (idx < 0 || idx >= messageModel.count) return
+            messageModel.remove(idx)
+            msgList.positionViewAtEnd()
+        }
+        // Day 20: 引用回复（bridge.quote_reply 触发，文本填入输入框）
+        function onQuoteInserted(quoted) {
+            if (!quoted) return
+            const prefix = "> " + quoted.replace(/\n/g, "\n> ") + "\n\n"
+            inputField.text = prefix + inputField.text
+            inputField.forceActiveFocus()
+            // 滚动到末尾
+            inputField.cursorPosition = inputField.text.length
+        }
+        // Day 20: toast 提示（bridge._toast / 菜单触发）
+        function onToast(msg) {
+            if (!msg) return
+            toastBox.msg = msg
+            toastTimer.restart()
         }
     }
 
