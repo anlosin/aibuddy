@@ -132,6 +132,15 @@ class ChatBridge(QObject):
                 self._last_model_name = _m.get("name") or _m.get("model_id", "?")
         except Exception:
             pass
+        # Day 19: 全局偏好（enable_thinking / enable_tools）从 cfg 顶层读
+        # 不绑在 model dict 上 —— 与 chat_window._load_settings 一致
+        try:
+            _cfg_full = _cfg.load_config()
+            self._enable_thinking = bool(_cfg_full.get("enable_thinking", False))
+            self._enable_tools = bool(_cfg_full.get("enable_tools", True))
+        except Exception:
+            self._enable_thinking = False
+            self._enable_tools = True
         # Day 14: 插件热更新 watcher
         self._plugin_watcher = None
         # Day 8: 当前会话 ID（main.py 启动日志读这个）
@@ -196,24 +205,61 @@ class ChatBridge(QObject):
         user_content = self._build_user_content(text, image_paths or [])
         self.start_real_chat(user_text=text, use_fake=use_fake, user_content=user_content)
 
+    # Day 19 (C-NEW-4 修复): 图片附件白名单 + 路径校验
+    # 防止 LLM 通过 QML DropArea 拖入任意路径的 4MB 内文件（如
+    # ~/.ssh/id_rsa、token 文件、.env 等）被读 + base64 编码 + 发给 LLM
+    # 仅允许图片扩展名（与 read_text_file 的 _READABLE_EXT 同模板）
+    _IMAGE_EXT = (
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+    )
+    _IMAGE_MIMES = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".webp": "image/webp",
+    }
+    _MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4MB / 张
+
     def _build_user_content(self, text, image_paths):
-        """Day 14: 构建用户消息 content"""
+        """Day 14: 构建用户消息 content
+
+        Day 19 (C-NEW-4 修复)：图片路径必须：
+        1. 是相对路径（拒绝对路径，与 read_text_file 一致）
+        2. 扩展名在 _IMAGE_EXT 白名单内
+        3. 文件 < _MAX_IMAGE_BYTES
+        不在白名单内 / 是绝对路径 / 读取失败 → 跳过并 print 警告
+        """
         if not image_paths:
             return text
         blocks = [{"type": "text", "text": text}]
         for path in image_paths:
+            # 路径安全检查（与 read_text_file 一致）
+            if not path or os.path.isabs(path) or path.startswith("/"):
+                print(f"[chat_bridge] 图片路径拒绝（绝对路径）: {path}")
+                continue
+            lower = path.lower()
+            ext = None
+            for e in self._IMAGE_EXT:
+                if lower.endswith(e):
+                    ext = e
+                    break
+            if ext is None:
+                print(f"[chat_bridge] 图片路径拒绝（不在白名单）: {path}")
+                continue
             try:
-                import base64
                 with open(path, "rb") as f:
                     data = f.read()
-                if len(data) > 4 * 1024 * 1024:
+                if len(data) > self._MAX_IMAGE_BYTES:
+                    print(f"[chat_bridge] 图片过大跳过 ({len(data)}B): {path}")
                     continue
+                import base64
                 b64 = base64.b64encode(data).decode("ascii")
-                ext = path.rsplit(".", 1)[-1].lower() if "." in path else "png"
-                mime = "image/png" if ext == "png" else f"image/{ext}"
+                mime = self._IMAGE_MIMES[ext]
                 blocks.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             except Exception as e:
-                print(f"[chat_bridge] 图片转 base64 失败 ({path}): {e}")
+                print(f"[chat_bridge] 图片读取失败 ({path}): {e}")
         return blocks
 
     @pyqtSlot(str)
@@ -381,6 +427,34 @@ class ChatBridge(QObject):
         """Day 10: 返回当前模型名称（QML 顶栏显示用）"""
         return self._last_model_name or "(未选择)"
 
+    @pyqtSlot(bool, bool, result=bool)
+    def set_preferences(self, enable_thinking: bool, enable_tools: bool) -> bool:
+        """Day 19 (M-NEW-5 修复): 写全局偏好到 cfg 顶层 + 立即生效。
+
+        QML 端「偏好设置」对话框（Main.qml）保存时调此 slot。
+        成功返回 True，失败返回 False。
+        """
+        try:
+            cfg = _config.load_config()
+            cfg["enable_thinking"] = bool(enable_thinking)
+            cfg["enable_tools"] = bool(enable_tools)
+            _config.save_config(cfg)
+            # 立即更新 self，下次 start_real_chat 生效
+            self._enable_thinking = bool(enable_thinking)
+            self._enable_tools = bool(enable_tools)
+            return True
+        except Exception as e:
+            print(f"[chat_bridge] set_preferences 失败: {e}")
+            return False
+
+    @pyqtSlot(result='QVariantMap')
+    def get_preferences(self):
+        """返回当前全局偏好（QML 端读后渲染设置对话框的勾选状态）。"""
+        return {
+            "enable_thinking": getattr(self, "_enable_thinking", False),
+            "enable_tools": getattr(self, "_enable_tools", True),
+        }
+
     @pyqtSlot(str, result=str)
     def read_text_file(self, file_path: str) -> str:
         """Day 13: 读文本文件内容（拖入文本文件时附加到输入框用）
@@ -546,12 +620,24 @@ class ChatBridge(QObject):
         - 读不到 / 错误 → 降级到 fake client（验证信号链路用）。
 
         读取逻辑：
-        1. _config.get_current_model() → {api_key, base_url, model_id, proxy, enable_thinking, enable_tools}
+        1. _config.get_current_model() → {api_key, base_url, model_id, proxy, ...}
         2. api_key 非空 → 生成真 client（会发出去）
         3. 否则 → fake
+
+        Day 19 (C-NEW-1 / M-NEW-5 修复)：
+        - WorkerThread 收到的 model_id 必须是当前激活模型的真实值，不再
+          硬编码 "mock-qwen"
+        - enable_thinking / enable_tools 从 self._enable_thinking / tools
+          读（这些是用户在「偏好设置」里设的全局偏好；启动时从 cfg 顶层读）
         """
         client = None
         model_name = "未选择"
+        # 默认值：未配置模型时回退
+        real_model_id = "mock-qwen"
+        # Day 19: 思考/工具开关来自全局偏好（用户在「偏好设置」设的）
+        # 不从 model dict 读（避免与「按模型设置」混淆）
+        real_enable_thinking = getattr(self, "_enable_thinking", False)
+        real_enable_tools = getattr(self, "_enable_tools", True)
         # Day 9+: use_fake=True 时跳过真 LLM（单元测试用，不烧 token）
         if use_fake:
             client = _make_fake_openai_client(user_text)
@@ -561,6 +647,7 @@ class ChatBridge(QObject):
                 current_model = _config.get_current_model()
                 if current_model and current_model.get("api_key"):
                     model_name = current_model.get("name") or current_model.get("model_id", "?")
+                    real_model_id = current_model.get("model_id", "mock-qwen")
                     client = _config.make_openai_client(
                         current_model.get("api_key", ""),
                         current_model.get("base_url", ""),
@@ -577,12 +664,13 @@ class ChatBridge(QObject):
         # 注意：use_fake=True 分支已经在上面设过 _last_model_name，
         # 真 LLM 分支也在 try 块设过，这里只覆盖"真解析失败 fallback 到 fake"的分支
 
-        # 真启动 WorkerThread（用空 messages 列表让 worker 不报错）
+        # Day 19: 用真实 model_id / 来自全局偏好的 enable_thinking / enable_tools
+        # max_rounds=3 是默认；自主模式可在偏好设置里调大（chat_window 路径会读）
         self._worker = WorkerThread(
             client=client,
-            model_id="mock-qwen",
-            enable_thinking=False,
-            enable_tools=True,           # Day 13: 启用工具调用
+            model_id=real_model_id,
+            enable_thinking=real_enable_thinking,
+            enable_tools=real_enable_tools,
             messages=[{"role": "user", "content": (user_content if user_content is not None else user_text)}],
             plugins=self._discover_plugins(),
             enabled_plugins=self._enabled_plugin_names(),

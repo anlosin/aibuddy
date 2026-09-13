@@ -240,8 +240,12 @@ def _do_command(args):
     cwd = args.get("cwd")
     use_sudo = bool(args.get("use_sudo", False))
     run_cmd = command
+    # Day 19 (H-NEW-1 修复)：cwd 直接拼字符串是 CWE-78 命令注入。
+    # LLM 可构造 `cwd='$(rm -rf /)'` 或 `cwd='; cat /etc/passwd'` 绕过黑名单。
+    # 用 shlex.quote 转义（远端 sh -c 会再解析一次）。
     if cwd:
-        run_cmd = 'cd "%s" && %s' % (cwd, command)
+        import shlex
+        run_cmd = "cd %s && %s" % (shlex.quote(cwd), command)
 
     client, err = _get_client(name)
     if err:
