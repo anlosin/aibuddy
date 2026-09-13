@@ -145,10 +145,45 @@ def _do_search_files(args):
     return f"匹配 {len(found)} 个文件:\n" + "\n".join(f"  {p}" for p in found[:500])
 
 
+# Day 19 (H-NEW-2): ReDoS 防护
+# 限制 query 长度（LLM 构造 `(a+)+$` 等灾难正则可在 100 字符输入上
+# 回溯上亿次，挂死 worker 线程）。同时禁用嵌套量词模式。
+MAX_QUERY_LEN = 200
+
+
+def _is_redos_pattern(pattern: str) -> bool:
+    """检测典型 ReDoS 模式：嵌套量词 (a+)+、(a|a)* 等。
+
+    启发式：检测一对 () 内含 +/* 后跟 +/* 的模式（嵌套量词）。
+    简单但覆盖 90% 灾难正则。
+    """
+    # 查找 ( 后跟 +/* 然后 ) 后跟 +/* 的模式
+    for i, c in enumerate(pattern):
+        if c == "(" and i + 1 < len(pattern) and pattern[i + 1] in "+*":
+            # 找匹配的 )
+            depth = 1
+            for j in range(i + 2, len(pattern)):
+                if pattern[j] == "(":
+                    depth += 1
+                elif pattern[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        # ) 后跟 +/* ？
+                        if j + 1 < len(pattern) and pattern[j + 1] in "+*":
+                            return True
+                        break
+    return False
+
+
 def _do_search_content(args):
     query = args.get("query", "")
     if not query:
         return "错误: 未提供 query"
+    # Day 19 (H-NEW-2): query 长度上限 + ReDoS 模式检测
+    if len(query) > MAX_QUERY_LEN:
+        return f"⛔ 检索 query 过长（{len(query)}>{MAX_QUERY_LEN}），防止 ReDoS"
+    if _is_redos_pattern(query):
+        return "⛔ 检索 query 含嵌套量词（疑似 ReDoS），已拒绝"
     target = args.get("path", ".")
     glob = args.get("glob", "*")
     max_results = int(args.get("max_results", 50))

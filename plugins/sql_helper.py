@@ -368,15 +368,20 @@ def _do_query(args):
                 pass
         cur.execute(sql)
         if sql.lower().startswith(("select", "with", "pragma", "show", "explain", "describe")):
-            rows = cur.fetchall()
+            # Day 19 (H-NEW-3 修复): 用 fetchmany(ROW_LIMIT + 1) 增量拉，
+            # 之前 fetchall() 把全表拉到内存（GB 级表直接 OOM），
+            # ROW_LIMIT 仅截断显示不截断 IO。
             cols = [d[0] for d in cur.description] if cur.description else []
-            n = len(rows)
-            head = rows[:ROW_LIMIT]
+            head = cur.fetchmany(ROW_LIMIT + 1)
+            truncated = len(head) > ROW_LIMIT
+            if truncated:
+                head = head[:ROW_LIMIT]
             table = [_row_to_str(cols, r) for r in head]
-            result = f"返回 {n} 行（显示前 {len(head)} 行）:\n列: {', '.join(map(str, cols))}\n"
+            result = (f"返回（显示前 {len(head)} 行，已截断到 {ROW_LIMIT}）:\n"
+                       f"列: {', '.join(map(str, cols))}\n")
             result += "\n".join(table)
-            if n > ROW_LIMIT:
-                result += f"\n... [已截断，剩余 {n - ROW_LIMIT} 行]"
+            if truncated:
+                result += f"\n... [已截断，剩余至少 1 行未读]"
             return result
         else:
             conn.commit()

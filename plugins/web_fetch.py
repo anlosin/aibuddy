@@ -81,6 +81,12 @@ def _clean_text(text):
     return "\n".join(cleaned)
 
 
+# Day 19 (H-NEW-4 修复): 限制响应体大小，防止恶意服务端返回 GB 级 body
+# 把进程 OOM 死。超过 MAX_BODY_SIZE 截断 + 警告（不抛错，避免 LLM
+# 路径上异常导致后续步骤全断）。
+MAX_BODY_SIZE = 4 * 1024 * 1024  # 4MB
+
+
 def _is_public_ip(ip_str):
     """判断 IP 是否为公网地址，拒绝私有/回环/链路本地/保留地址段（防 SSRF）。"""
     try:
@@ -198,16 +204,31 @@ def _ip_safe_fetch(url, timeout=15):
                 k, _, v = ln.partition(":")
                 headers[k.strip().lower()] = v.strip()
 
-        # 读 body
+        # 读 body（Day 19 (H-NEW-4): 限制大小防 OOM）
         cl = headers.get("content-length")
         if cl is not None:
             need = int(cl)
+            if need > MAX_BODY_SIZE:
+                return status, headers, b""  # 上层会看到空 body
             body = rest + _recv_exact(sock, need - len(rest))
+            if len(body) > MAX_BODY_SIZE:
+                body = body[:MAX_BODY_SIZE]
         elif headers.get("transfer-encoding", "").lower() == "chunked":
             body = _read_chunked(sock, rest)
+            if len(body) > MAX_BODY_SIZE:
+                body = body[:MAX_BODY_SIZE]
         else:
-            # 直到关闭（HTTP/1.1 Connection: close）
-            body = rest + b"".join(iter(lambda: sock.recv(4096), b""))
+            # 直到关闭（HTTP/1.1 Connection: close）—— 边收边计字节数
+            buf = bytearray(rest)
+            while len(buf) < MAX_BODY_SIZE:
+                try:
+                    chunk = sock.recv(4096)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                buf.extend(chunk)
+            body = bytes(buf[:MAX_BODY_SIZE])
         return status, headers, body
     finally:
         try:

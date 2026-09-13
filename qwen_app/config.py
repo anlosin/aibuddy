@@ -27,17 +27,23 @@ _all_conns = set()      # A3: 跟踪所有打开的连接（atexit 统一关闭�
 
 
 def _get_db():
-    """获取当前线程的 SQLite 连接（惰性创建）"""
+    """获取当前线程的 SQLite 连接（惰性创建）
+
+    Day 19 (H-NEW-6 修复): _all_conns.add() 必须在 _CONN_LOCK 内，
+    否则 close_all_conns 遍历时其他线程 add 会触发
+    RuntimeError: Set changed size during iteration。
+    """
     db = getattr(_local, "conn", None)
     if db is None:
-        os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
-        db = sqlite3.connect(CONVERSATIONS_DB)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA foreign_keys=ON")
-        _local.conn = db
-        # 跟踪所有打开的连接（atexit 关闭 + 测试清理）
-        _all_conns.add(db)
+        # Day 19: 加锁保护 _all_conns.add 防止并发迭代异常
+        with _CONN_LOCK:
+            os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
+            db = sqlite3.connect(CONVERSATIONS_DB)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA foreign_keys=ON")
+            _local.conn = db
+            _all_conns.add(db)
     return db
 
 

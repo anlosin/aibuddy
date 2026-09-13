@@ -287,6 +287,15 @@ class ChatBridge(QObject):
         ".webp": "image/webp",
     }
     _MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4MB / 张
+    # Day 19 (H-NEW-5 修复): 流式累积 buffer 上限。恶意/失控 LLM 服务端
+    # 可无限流式响应，累积 _stream_buffers[who] 可 OOM。
+    # 超过 1MB 后只保留最后 1MB（裁掉前段，避免信息丢失一半
+    # —— 实际一般 1MB ≈ 200k 中文字，已远超上下文需求）。
+    MAX_STREAM_BUFFER = 1 * 1024 * 1024
+    # Day 19 (H-NEW-7 修复): history 大小/条数限制，防止恶意/失控 LLM
+    # 返回 GB 级 content 把 SQLite 撑爆。
+    MAX_CONTENT_LEN = 100 * 1024          # 100KB / 条
+    MAX_HISTORY_LEN = 500                 # 最多 500 条消息（≈ 50MB 文本上限）
 
     def _build_user_content(self, text, image_paths):
         """Day 14: 构建用户消息 content
@@ -695,11 +704,17 @@ class ChatBridge(QObject):
         - user 消息: 立即保存
         - assistant 消息: response_complete / stop / error 时由 _flush_stream_buffer 触发保存
         - 标题自动从第一条 user message 取（前 30 字，"新对话" 时才覆盖）
+
+        Day 19 (H-NEW-7 修复)：content 超过 MAX_CONTENT_LEN 截断；
+        history 超过 MAX_HISTORY_LEN 截掉最旧消息（保留最近 500 条）。
         """
         if not self._current_conv_id:
             return
         if not content or not content.strip():
             return
+        # Day 19: 截断单条 content 避免 LLM 写 GB 级消息
+        if len(content) > self.MAX_CONTENT_LEN:
+            content = content[:self.MAX_CONTENT_LEN] + "\n\n[已截断，超出 MAX_CONTENT_LEN]"
         try:
             convs, _ = _config.load_conversations()
             conv = next((c for c in convs if c["id"] == self._current_conv_id), None)
@@ -707,6 +722,9 @@ class ChatBridge(QObject):
                 return
             history = conv.get("history") or []
             history.append({"role": role, "content": content})
+            # Day 19: 截断 history 长度（保留最近 MAX_HISTORY_LEN 条）
+            if len(history) > self.MAX_HISTORY_LEN:
+                history = history[-self.MAX_HISTORY_LEN:]
             conv["history"] = history
             # 标题自动取首条 user 消息前 30 字（仅在"新对话"标题时）
             if role == "user" and conv.get("title", "新对话") == "新对话":
@@ -817,7 +835,12 @@ class ChatBridge(QObject):
         self._worker.start()
 
     def _on_worker_chunk(self, content: str, is_thinking: bool):
-        """WorkerThread.chunk_received → QML.appendToLast"""
+        """WorkerThread.chunk_received → QML.appendToLast
+
+        Day 19 (H-NEW-5 修复): _stream_buffers[who] 累积超 MAX_STREAM_BUFFER
+        时裁掉前段，保留最后 1MB（200k 中文字远超上下文需求）。防止
+        恶意/失控 LLM 服务端无限流式响应把进程 OOM 死。
+        """
         who = "thinking" if is_thinking else "ai"
         if self._last_who != who:
             # 切段（思考 → 回答）：新建气泡
@@ -825,7 +848,11 @@ class ChatBridge(QObject):
             self.messageAdded.emit(who, self._mk_msg("", ts))
             self._last_who = who
         # Day 6: 累积 buffer（流式期间用 PlainText 显示，finalize 时用 Markdown 替换）
-        self._stream_buffers[who] = self._stream_buffers.get(who, "") + content
+        buf = self._stream_buffers.get(who, "") + content
+        if len(buf) > self.MAX_STREAM_BUFFER:
+            # 裁前段保留后 1MB
+            buf = buf[-self.MAX_STREAM_BUFFER:]
+        self._stream_buffers[who] = buf
         self.appendToLast.emit(who, content)
 
     def _on_worker_complete(self, full: str):
