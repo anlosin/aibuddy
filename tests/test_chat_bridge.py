@@ -555,12 +555,23 @@ class TestReadTextFile(unittest.TestCase):
         result = self.bridge.read_text_file("nonexistent.py")
         self.assertIn("失败", result)
 
-    def test_read_absolute_path_rejected(self):
-        """Day 18 修复 C3：绝对路径直接拒绝"""
-        import os
-        abs_path = os.path.join(os.getcwd(), "anything.py")
-        result = self.bridge.read_text_file(abs_path)
-        self.assertIn("不支持绝对路径", result)
+    def test_read_absolute_path_accepted(self):
+        """Day 19.1 修订：GUI 拖入永远是绝对路径，必须能读。
+        之前的 Day 18 C3 修复（拒绝绝对路径）是错误设计 —— 挡掉了
+        所有合法 GUI 拖入。改用扩展名白名单 + 大小限制作为真正的防御。
+        """
+        import os, tempfile
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w",
+                                          encoding="utf-8") as f:
+            f.write("print('hello')\n")
+            abs_path = f.name
+        try:
+            result = self.bridge.read_text_file(abs_path)
+            # 应能读到内容（含代码 + 文件头标记）
+            self.assertIn("print('hello')", result,
+                          f"GUI 拖入绝对路径必须能读，实际返回：{result!r}")
+        finally:
+            os.remove(abs_path)
 
     def test_read_empty_path_returns_empty(self):
         """空路径返回空字符串"""

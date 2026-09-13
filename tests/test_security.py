@@ -67,11 +67,16 @@ class TestReadTextFileSecurity(unittest.TestCase):
         r = self.bridge.read_text_file("evil.exe")
         self.assertIn("不支持的文件类型", r)
 
-    def test_rejects_absolute_path(self):
+    def test_absolute_path_accepted_for_whitelisted_ext(self):
+        """Day 19.1 修订：GUI 拖入永远是绝对路径，必须能读白名单内文件。
+        安全由扩展名白名单 + 大小限制共同保证，不是绝对路径防御。
+        """
         abs_py = os.path.join(self.tmp, "hello.py")
+        with open(abs_py, "w", encoding="utf-8") as f:
+            f.write("print('hi')\n")
         r = self.bridge.read_text_file(abs_py)
-        self.assertIn("不支持绝对路径", r)
-        self.assertNotIn("print", r)               # 关键：内容不能泄漏
+        # 应读到内容（不是被拒）
+        self.assertIn("print('hi')", r)
 
     def test_empty_returns_empty(self):
         self.assertEqual(self.bridge.read_text_file(""), "")
@@ -80,8 +85,12 @@ class TestReadTextFileSecurity(unittest.TestCase):
         r = self.bridge.read_text_file("nonexistent.py")
         self.assertIn("[读文件失败", r)
 
-    def test_absolute_path_arbitrary_sensitive_blocked(self):
-        """核心：直接传 ~/.ssh/id_rsa 这种绝对路径必须被拒绝（C3 修前会读出私钥）"""
+    def test_sensitive_absolute_path_blocked_by_whitelist(self):
+        """核心：~/.ssh/id_rsa / /etc/passwd 等敏感路径必须被拒绝。
+        Day 19.1 修订后，"绝对路径"不再被拒，
+        但扩展名不在 _READABLE_EXT 白名单（id_rsa 无扩展名、passwd 无扩展名），
+        由白名单兜底保护。
+        """
         for sensitive in [
             "C:/Users/admin/.ssh/id_rsa",
             "/etc/passwd",
@@ -89,7 +98,8 @@ class TestReadTextFileSecurity(unittest.TestCase):
         ]:
             with self.subTest(sensitive=sensitive):
                 r = self.bridge.read_text_file(sensitive)
-                self.assertIn("不支持绝对路径", r)
+                # 不在白名单 → 拒绝（不再因绝对路径拒，而是扩展名白名单兜底）
+                self.assertIn("不支持的文件类型", r)
                 # 关键：内容绝不泄漏
                 self.assertNotIn("BEGIN", r)
                 self.assertNotIn("root:", r)

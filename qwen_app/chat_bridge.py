@@ -36,7 +36,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer, QF
 from .worker import WorkerThread
 from . import config as _config
 from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条路径都走这里）
-from ._safe_path import is_safe_relative  # Day 19: 路径安全检查（DRY）
+from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
 
 
 class ChatBridge(QObject):
@@ -312,7 +312,7 @@ class ChatBridge(QObject):
         blocks = [{"type": "text", "text": text}]
         for path in image_paths:
             # 路径安全检查（与 read_text_file 一致；Day 19 抽到 _safe_path）
-            if not is_safe_relative(path):
+            if not is_safe_to_read(path):
                 print(f"[chat_bridge] 图片路径拒绝（绝对路径）: {path}")
                 continue
             lower = path.lower()
@@ -577,10 +577,10 @@ class ChatBridge(QObject):
         if not file_path:
             out["error"] = "路径为空"
             return out
-        # Day 19 (H-NEW-8): 拒绝对对路径（与 read_text_file 一致；
-        # 拖入是 file:// URL，Qt 会做 toLocalFile，但兜底防 LLM 拼字符串）
-        if not is_safe_relative(file_path):
-            out["error"] = "绝对路径被拒绝"
+        # Day 19 (H-NEW-8): 路径字符串过滤（与 read_text_file 一致；
+        # Day 19.1 修订：不再拒绝绝对路径，GUI 拖入永远绝对）
+        if not is_safe_to_read(file_path):
+            out["error"] = "路径字符串不合法（空或含控制字符）"
             return out
         try:
             out["size"] = os.path.getsize(file_path)
@@ -620,9 +620,9 @@ class ChatBridge(QObject):
         """
         if not file_path:
             return ""
-        # C3 修复：拒绝绝对路径（Day 19 抽到 _safe_path 统一处理）
-        if not is_safe_relative(file_path):
-            return ("[读文件失败: 不支持绝对路径（仅允许读取程序工作目录内的文本文件）]")
+        # 路径字符串过滤（Day 19.1：不再拒绝绝对路径；GUI 拖入永远绝对）
+        if not is_safe_to_read(file_path):
+            return "[读文件失败: 路径不合法（空或含控制字符）]"
         # C3 修复：扩展名白名单
         lower = file_path.lower()
         if not any(lower.endswith(ext) for ext in self._READABLE_EXT):
