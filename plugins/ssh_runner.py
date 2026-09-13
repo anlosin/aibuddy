@@ -224,7 +224,7 @@ def _do_connect(args):
     _save_cfg()
     # 用户本次传入的密码（刚存到 keyring）就是有密码
     has_pw = bool(cfg.get("password"))
-    auth = "私钥(%s)" % cfg["key_path"] if cfg.get("key_path") else "密码" if has_pw else "无密码/agent"
+    auth = _auth_label(cfg, has_pw)
     return f"✅ 连接成功并已保存: [{name}] {cfg['user']}@{cfg['host']}:{cfg['port']} (认证方式: {auth})。密码已加密存入系统凭据库，重启后无需重输。"
 
 
@@ -314,6 +314,19 @@ def _sftp_transfer(args, upload):
                 sftp.close()
             except Exception:
                 pass
+
+
+def _auth_label(cfg: dict, has_pw: bool) -> str:
+    """Day 19 (M-NEW-1): 返回连接认证方式的可读标签。
+
+    优先级：私钥 > 密码 > 无密码/agent。
+    原来 inline 三元嵌套在 _do_connect 里，可读性差，分支多了易出错。
+    """
+    if cfg.get("key_path"):
+        return f"私钥({cfg['key_path']})"
+    if has_pw:
+        return "密码"
+    return "无密码/agent"
 
 
 def _do_list_connections(args):
