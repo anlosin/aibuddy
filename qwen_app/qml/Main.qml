@@ -637,8 +637,15 @@ ApplicationWindow {
                             border.width: 1
                             // Day 12: 拖拽文件支持（文件路径填入输入框）
                             // Day 13: 图片预览 + 文本文件内容自动附加
+                            // Day 19 (H-NEW-8): 拖入文件大小校验（>50MB 直接拒）
                             DropArea {
                                 anchors.fill: parent
+                                // Day 19 (H-NEW-8): 大文件拒绝上限 50MB。
+                                // chat_bridge.read_text_file 自身 MAX_SIZE=50KB（远超一般文本），
+                                // 图片附件 4MB 上限已经够小，但用户可能误拖 ISO / 视频 / 压缩包，
+                                // 这种"无意义的大文件"在 DropArea 早期直接拒 + 提示，避免
+                                // 后面 read_text_file / image 读大文件卡 GUI。
+                                readonly property int maxFileBytes: 50 * 1024 * 1024
                                 onDropped: {
                                     if (drop.hasUrls && drop.urls.length > 0) {
                                         // Day 15: 用 toLocalFile 正确处理 URL 编码（空格 → %20）
@@ -646,6 +653,18 @@ ApplicationWindow {
                                                 || drop.urls[0].toString().replace("file:///", "").replace("file://", "")
                                         const fileUrl = drop.urls[0].toString()
                                         const lower = filePath.toLowerCase()
+                                        // Day 19 (H-NEW-8): 大小校验优先于扩展名判断，
+                                        // 因为 ISO / .exe 等都是大文件，先拒大小更省事。
+                                        if (bridge) {
+                                            const sizeInfo = bridge.get_file_size(filePath)
+                                            if (sizeInfo.ok && sizeInfo.size > maxFileBytes) {
+                                                // 通过 appendError 发一个错误气泡（QML 端会渲染成红色 toast）
+                                                bridge.appendError("system",
+                                                    "文件过大，已拒绝拖入：" + filePath.split(/[\\\\\\/]/).pop() +
+                                                    " (" + Math.round(sizeInfo.size / 1024 / 1024) + "MB > 50MB 上限)")
+                                                return
+                                            }
+                                        }
                                         const isImage = lower.endsWith(".png") || lower.endsWith(".jpg")
                                             || lower.endsWith(".jpeg") || lower.endsWith(".gif")
                                             || lower.endsWith(".bmp") || lower.endsWith(".webp")

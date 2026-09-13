@@ -560,6 +560,38 @@ class ChatBridge(QObject):
             })
         return out
 
+    @pyqtSlot(str, result='QVariantMap')
+    def get_file_size(self, file_path: str):
+        """Day 19 (H-NEW-8): 查文件大小（字节）。
+
+        QML 端 DropArea 拖入文件时调本 slot 判断是否超过 50MB 上限。
+        超过直接拒绝 + 显示提示气泡，避免无意义的大文件（ISO / 视频 / 压缩包）
+        进 read_text_file / image 附件把 GUI 卡死。
+
+        返回结构: {"ok": bool, "size": int, "error": str}
+        - ok=True:  size 是文件字节数
+        - ok=False: error 是失败原因（不存在 / 无权限 / 路径为空）
+        """
+        out = {"ok": False, "size": 0, "error": ""}
+        if not file_path:
+            out["error"] = "路径为空"
+            return out
+        # Day 19 (H-NEW-8): 拒绝对对路径（与 read_text_file 一致；
+        # 拖入是 file:// URL，Qt 会做 toLocalFile，但兜底防 LLM 拼字符串）
+        if os.path.isabs(file_path) or file_path.startswith("/"):
+            out["error"] = "绝对路径被拒绝"
+            return out
+        try:
+            out["size"] = os.path.getsize(file_path)
+            out["ok"] = True
+        except FileNotFoundError:
+            out["error"] = "文件不存在"
+        except PermissionError:
+            out["error"] = "无权限访问"
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
     @pyqtSlot(result='QVariantList')
     def list_readable_ext(self):
         """Day 19 (M-NEW-4): 暴露 _READABLE_EXT 白名单给 QML。
