@@ -13,9 +13,9 @@ class TestChatBridgeUsesRealModelId(unittest.TestCase):
     且 enable_thinking/enable_tools 必须从全局偏好读，不再硬编码。"""
 
     def test_no_hardcoded_mock_qwen_in_start_real_chat(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 start_real_chat 在 _bridge_stream.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # 在 start_real_chat 函数体内，WorkerThread(...) 的 model_id
         # 参数必须用 real_model_id 变量（不再硬编码字面量 "mock-qwen"）。
         # 注意：默认变量赋值 `real_model_id = "mock-qwen"` 是允许的（仅缺省时回退）。
@@ -50,10 +50,10 @@ class TestChatBridgeUsesRealModelId(unittest.TestCase):
         self.fail("找不到 start_real_chat")
 
     def test_no_hardcoded_enable_thinking_false(self):
-        from qwen_app import chat_bridge
+        # 拆分后 start_real_chat 在 _bridge_stream.py —— 扫模块组
+        from tests._bridge_source import bridge_source
         import ast
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        src = bridge_source()
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "start_real_chat":
@@ -243,9 +243,9 @@ class TestChatBridgeExpertIntegration(unittest.TestCase):
         self.fail("找不到 _build_system_prompt")
 
     def test_start_real_chat_takes_system_prompt(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 start_real_chat 在 _bridge_stream.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # start_real_chat 签名必须含 system_prompt 参数
         import ast
         tree = ast.parse(src)

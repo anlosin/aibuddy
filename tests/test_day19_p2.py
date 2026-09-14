@@ -80,9 +80,9 @@ class TestChatBridgeStreamBufferSize(unittest.TestCase):
                       "H-NEW-5: 必须定义 MAX_STREAM_BUFFER 限制累积 buffer 大小")
 
     def test_on_worker_chunk_truncates(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 _on_worker_chunk 在 _bridge_stream.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         import ast
         tree = ast.parse(src)
         for node in ast.walk(tree):
