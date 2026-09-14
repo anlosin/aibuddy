@@ -192,9 +192,9 @@ class TestChatBridgePluginState(unittest.TestCase):
     """C-NEW-2: _enabled_plugin_names 必须从 cfg 持久化读，不再硬编码。"""
 
     def test_reads_from_persisted_plugin_state(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 _enabled_plugin_names 可能位于 _bridge_plugin.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # _enabled_plugin_names 必须调 load_plugin_state
         import ast
         tree = ast.parse(src)

@@ -39,9 +39,10 @@ from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条�
 from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
 from .settings_dialog import show_settings, show_model_manager, show_plugin_manager  # Day 20.1: QtQuick 调 PyQt5 对话框
 from ._dialog_host import _DialogHost  # Day 20.2: PyQt5 对话框需要 QWidget + 状态，bridge 是 QObject，用 host 适配
+from ._bridge_plugin import PluginMixin  # 拆分 Step 1: 插件管理方法（信号声明仍在本类体内）
 
 
-class ChatBridge(QObject):
+class ChatBridge(PluginMixin, QObject):
 
     # ============ Python → QML 信号 ============
     # ⚠️ 会被 QML Connections 监听的信号：参数必须 ≤2 个（见文件头 QTBUG-94360 说明）
@@ -159,38 +160,6 @@ class ChatBridge(QObject):
         # Day 8: 当前会话 ID（main.py 启动日志读这个）
         self._current_conv_id = None
         self._init_plugin_watcher()
-
-    def _init_plugin_watcher(self):
-        """Day 14: 监听 plugins 目录变化"""
-        try:
-            from .plugin_manager import PLUGINS_DIR
-            if not os.path.isdir(PLUGINS_DIR):
-                return
-            self._plugin_watcher = QFileSystemWatcher([PLUGINS_DIR])
-            self._plugin_watcher.directoryChanged.connect(self._on_plugin_dir_changed)
-        except Exception as e:
-            print(f"[chat_bridge] 初始化 plugin watcher 失败: {e}")
-
-    @pyqtSlot()
-    def enable_plugin_watcher(self):
-        """Day 14: main.py QML Component.onCompleted 调这个启用 watcher
-
-        单元测试不需要 watcher（在 __init__ 跑 reload_modules 慢且影响测试），
-        推迟到 Qt 事件循环就绪后再启用。
-        """
-        if self._plugin_watcher is None:
-            self._init_plugin_watcher()
-
-    def _on_plugin_dir_changed(self, path):
-        """Day 14: 插件目录变化时触发热重载（防抖 300ms）"""
-        # Day 15: 复用 timer（避免频繁创建）
-        if not hasattr(self, "_plugin_reload_timer") or self._plugin_reload_timer is None:
-            self._plugin_reload_timer = QTimer()
-            self._plugin_reload_timer.setSingleShot(True)
-            self._plugin_reload_timer.timeout.connect(self.reload_plugins)
-        else:
-            self._plugin_reload_timer.stop()
-        self._plugin_reload_timer.start(300)
 
     # ============ QML → Python Slot ============
     # Day 17 修复: QML 侧调用的是 send_message(text, false, paths)（3 个实参），
@@ -1067,70 +1036,6 @@ class ChatBridge(QObject):
         return out
 
     # ============ 内部辅助 ============
-    def _discover_plugins(self) -> dict:
-        """Day 13: 扫描 plugins 目录（plugin_manager.discover_plugins）"""
-        try:
-            from . import plugin_manager
-            plugins, _ = plugin_manager.discover_plugins()
-            return plugins
-        except Exception as e:
-            print(f"[chat_bridge] discover_plugins 失败: {e}")
-            return {}
-
-    @pyqtSlot()
-    def reload_plugins(self):
-        """Day 14: 强制重载 plugins 目录（reload_modules=True 清 sys.modules 缓存）
-
-        Day 18 (H1 修复)：如果当前有 worker 在跑（_worker_count > 0），
-        直接 reload 会让 worker 持有的 plugin module 对象引用 unbound，
-        工具调用会抛 AttributeError（半写半未写风险）。推迟到所有 worker 退出后
-        再 reload（最多等 5 秒，超时仍尝试但 emit 失败信号）。
-        Day 18 (M7)：失败时通过 pluginReloadFailed 信号把错误传回 QML，
-        不再仅 print 到 stderr（GUI 之前看不到）。
-        """
-        with self._worker_count_lock:
-            if self._worker_count > 0:
-                self._reload_pending = True
-                self._reload_attempts = getattr(self, "_reload_attempts", 0) + 1
-                if self._reload_attempts <= 50:        # 50 × 100ms = 5s 超时
-                    QTimer.singleShot(100, self.reload_plugins)
-                    return
-                # 超时：强制尝试 + emit 失败警告
-                self._reload_pending = False
-                self.pluginReloadFailed.emit("worker 在 5 秒内未退出，强制重载可能半写")
-        self._reload_attempts = 0
-        self._do_reload_plugins()
-
-    def _do_reload_plugins(self):
-        """实际执行 reload（被 reload_plugins / 延迟重试调用）"""
-        try:
-            from . import plugin_manager
-            plugins, _ = plugin_manager.discover_plugins(reload_modules=True)
-            self.pluginReloaded.emit(len(plugins))
-        except Exception as e:
-            err = f"{type(e).__name__}: {e}"
-            print(f"[chat_bridge] 插件热更新失败: {err}")
-            self.pluginReloadFailed.emit(err)
-
-    def _enabled_plugin_names(self) -> list:
-        """Day 13: 列出已启用插件名（带 TOOLS 字段的）
-
-        Day 19 (C-NEW-2 修复)：从 cfg 持久化的 enabled_plugins 字段读，
-        与 chat_window._load_plugins 一致 —— 之前是「所有 TOOLS 插件视为启用」，
-        QtQuick 路径下用户在「插件管理」里禁用某个插件完全无效。
-        """
-        try:
-            from . import config as _cfg
-            from . import plugin_manager
-            # 读持久化的启用列表（load_plugin_state 已在 user 排除不存在的）
-            saved = _cfg.load_plugin_state()
-            plugins, _ = plugin_manager.discover_plugins()
-            # 取交集：磁盘上存在 + 标记启用 + 实际有 TOOLS
-            return [n for n in saved
-                    if n in plugins and hasattr(plugins[n], "TOOLS") and plugins[n].TOOLS]
-        except Exception:
-            return []
-
     def _mk_msg(self, text: str, ts: str, code: str = "") -> dict:
         """Day 17: messageAdded 的负载（收敛为单个 QVariantMap，规避 QTBUG-94360）
 
