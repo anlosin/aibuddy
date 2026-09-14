@@ -279,5 +279,70 @@ class TestShowDialogSlotsUseHost(unittest.TestCase):
         self._slot_uses_host_not_self("show_plugin_manager_dialog", "show_plugin_manager")
 
 
+class TestAutomationDialogFactory(unittest.TestCase):
+    """Day 20.3: automation_dialogs.show_automation_manager(host) 工厂入口。
+
+    Day 20.1 漏了这个工厂，slot 只能 toast 占位。Day 20.3 补齐后
+    点菜单应该真正弹 AutomationManagerDialog。
+    """
+
+    def setUp(self):
+        from PyQt5.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication(sys.argv)
+
+    def test_factory_exists(self):
+        from qwen_app import automation_dialogs
+        self.assertTrue(hasattr(automation_dialogs, "show_automation_manager"))
+        self.assertTrue(callable(automation_dialogs.show_automation_manager))
+
+    def test_bridge_slot_calls_factory(self):
+        """bridge.show_automation_manager_dialog 必须调
+        automation_dialogs.show_automation_manager(host) —— 不能再走
+        hasattr 兜底分支（'待补完' toast）"""
+        from qwen_app import chat_bridge
+        src = open(chat_bridge.__file__, encoding="utf-8").read()
+        self.assertIn("from .automation_dialogs import show_automation_manager", src,
+                      "bridge 必须显式 import show_automation_manager 工厂")
+        self.assertIn("show_automation_manager(host)", src,
+                      "bridge.show_automation_manager_dialog 必须传 host 给工厂")
+
+
+class TestDialogHostScheduler(unittest.TestCase):
+    """Day 20.3: _DialogHost.scheduler 懒构造（QtQuick 路径无 client/model_id，
+    按 standalone 模式构造）。"""
+
+    def setUp(self):
+        from PyQt5.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication(sys.argv)
+        from qwen_app.chat_bridge import ChatBridge
+        self.bridge = ChatBridge(theme="light")
+        from qwen_app._dialog_host import _DialogHost
+        self.host = _DialogHost(self.bridge)
+
+    def test_scheduler_property_lazy(self):
+        """首次访问 host.scheduler 才构造 Scheduler 实例（不启动 scheduler 啥都不做）"""
+        # 先确认 bridge 还没装 scheduler
+        self.assertFalse(hasattr(self.bridge, "_scheduler"))
+        # 触发懒构造
+        sch = self.host.scheduler
+        if sch is None:
+            self.skipTest("scheduler 懒构造失败（可能是 key/url 缺失或 plugin 扫描失败）")
+        # 构造后 bridge 应该有 _scheduler 属性
+        self.assertIs(self.bridge._scheduler, sch)
+        # 二次访问应复用同一实例（不重复构造）
+        sch2 = self.host.scheduler
+        self.assertIs(sch2, sch, "scheduler 必须缓存，不能每次 new")
+
+    def test_timer_started(self):
+        """懒构造后 30s QTimer 已启动（与 chat_window._sched_timer 行为对齐）"""
+        sch = self.host.scheduler
+        if sch is None:
+            self.skipTest("scheduler 懒构造失败")
+        self.assertTrue(hasattr(self.bridge, "_sched_timer"),
+                        "bridge 上必须有 _sched_timer 字段")
+        self.assertTrue(self.bridge._sched_timer.isActive(),
+                        "_sched_timer 必须启动")
+
+
 if __name__ == "__main__":
     unittest.main()

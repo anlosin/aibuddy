@@ -115,33 +115,39 @@ Rectangle {
         }
     }
 
-    // ===== Day 20: 三点按钮 + 操作菜单（hover 时显示）=====
+    // ===== Day 20: 三点按钮 + 操作菜单 =====
     // 位置：user 气泡左上角 / 其他气泡右上角（避开头像）
+    // Day 20.3 修复（user 反馈"点击无反应"）：
+    //   1) opacity 永久 1.0（原 0.7 太淡，hover 才 1.0，用户看不见）
+    //   2) MenuItem 跨 Popup 窗口 scope 失效：直接引用 bubble.text / bubble.msgIndex
+    //      在 Menu 弹出后可能为 undefined（Menu 是独立 Popup window）。改为
+    //      把气泡数据先缓存到 Menu 的 currentMsgXxx 属性，MenuItem 只读这些属性。
+    //   3) popup() 用 mapToItem(null, ...) 映射到屏幕绝对坐标，避免 delegate
+    //      本地坐标让 Menu 弹到不可见位置
     Rectangle {
         id: moreBtn
         width: 22
         height: 22
         radius: 11
-        // user 气泡左上角，其他右上角（user 头像已在左侧不会冲突）
         anchors.top: parent.top
         anchors.right: bubble.isUser ? undefined : parent.right
         anchors.left: bubble.isUser ? parent.left : undefined
         anchors.topMargin: 4
         anchors.rightMargin: 4
         anchors.leftMargin: 4
-        // 头像不挡时永远显示；user 气泡头像挡则隐藏
-        visible: bubble.isUser ? false : true
-        // Day 19.1 修复（类比 drop bug 教训）：默认 opacity=1.0 永远可见。
-        // hover/opened 时变深（仍然有视觉反馈），但不再依赖 hover 才出现。
-        opacity: moreMa.containsMouse || bubbleMenu.opened ? 1.0 : 0.7
-        Behavior on opacity { NumberAnimation { duration: 150 } }
-        color: moreMa.containsMouse ? Qt.rgba(0, 0, 0, 0.10) : Qt.rgba(0, 0, 0, 0.05)
+        // Day 20.3: 全部气泡都显示三点（user 气泡头像在左侧不冲突，位置改左上）
+        visible: true
+        // 永远 opacity 1.0；hover 时背景变深做视觉反馈
+        opacity: 1.0
+        color: moreMa.containsMouse || bubbleMenu.opened
+            ? Qt.rgba(0, 0, 0, 0.15)
+            : Qt.rgba(0, 0, 0, 0.06)
         z: 5
         Text {
             anchors.centerIn: parent
             text: "\u22ef"  // ⋯
             color: bubble.textColor
-            opacity: 0.7
+            opacity: 0.8
             font.pixelSize: 16
             font.bold: true
         }
@@ -150,83 +156,97 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            // 防止冒泡触发 ListView 点击行为
             onClicked: {
+                // Day 20.3: 先把气泡数据缓存到 Menu 属性，避开跨 Popup window
+                // scope 引用 bubble.* 失效的问题
+                bubbleMenu.currentMsgText = bubble.text || ""
+                bubbleMenu.currentMsgCode = bubble.code || ""
+                bubbleMenu.currentMsgWho = bubble.who
+                bubbleMenu.currentMsgIndex = bubble.msgIndex
+                bubbleMenu.currentMsgHasCode = bubble.hasCode
+                // 屏幕绝对坐标：moreBtn 右下角对齐菜单右边缘，避免菜单超出可见区
+                var pt = moreBtn.mapToItem(null, moreBtn.width, moreBtn.height + 2)
+                bubbleMenu.x = pt.x - bubbleMenu.width + moreBtn.width
+                bubbleMenu.y = pt.y
                 bubbleMenu.popup()
-                // 阻止事件传到外层 MouseArea
             }
         }
     }
 
     // 三点菜单（按 who 类型自适应）
+    // Day 20.3: 所有数据通过 Menu 自身的 currentMsgXxx 属性传递，MenuItem 不再
+    // 直接引用 bubble.*（跨 Popup window scope 不可靠）。
     Menu {
         id: bubbleMenu
-        // 弹出位置：三点按钮正下方（避免菜单覆盖气泡）
-        y: moreBtn.y + moreBtn.height + 2
-        x: bubble.isUser ? moreBtn.x : (moreBtn.x + moreBtn.width - width)
+        property string currentMsgText: ""
+        property string currentMsgCode: ""
+        property string currentMsgWho: ""
+        property int currentMsgIndex: -1
+        property bool currentMsgHasCode: false
+
         // 普通复制（user / ai / tool_* 都给）
         MenuItem {
             text: qsTr("复制")
-            onTriggered: if (bridge) bridge.copy_to_clipboard(bubble.text || "")
+            onTriggered: if (bridge) bridge.copy_to_clipboard(bubbleMenu.currentMsgText)
         }
         // 复制代码（仅当 hasCode）
         MenuItem {
             text: qsTr("复制代码")
-            visible: bubble.hasCode
-            onTriggered: if (bridge) bridge.copy_code(bubble.code || "")
+            visible: bubbleMenu.currentMsgHasCode
+            onTriggered: if (bridge) bridge.copy_code(bubbleMenu.currentMsgCode)
         }
-        MenuSeparator { visible: bubble.hasCode }
+        MenuSeparator { visible: bubbleMenu.currentMsgHasCode }
         // 引用回复（user / ai；tool_* 不引用，太冗余）
         MenuItem {
             text: qsTr("引用回复")
-            visible: !bubble.isTool
+            visible: bubbleMenu.currentMsgWho !== "tool_call"
+                 && bubbleMenu.currentMsgWho !== "tool_result"
             onTriggered: {
                 if (!bridge) return
-                // 取 bubble.text 的前 80 字（防过长）
-                var q = (bubble.text || "").substring(0, 80)
-                if ((bubble.text || "").length > 80) q += "..."
+                var q = bubbleMenu.currentMsgText.substring(0, 80)
+                if (bubbleMenu.currentMsgText.length > 80) q += "..."
                 bridge.quote_reply("", q)
             }
         }
         // 朗读（user / ai；tool_* 不朗读）
         MenuItem {
             text: qsTr("朗读")
-            visible: !bubble.isTool
-            onTriggered: if (bridge) bridge.speak_text(bubble.text || "")
+            visible: bubbleMenu.currentMsgWho !== "tool_call"
+                 && bubbleMenu.currentMsgWho !== "tool_result"
+            onTriggered: if (bridge) bridge.speak_text(bubbleMenu.currentMsgText)
         }
-        MenuSeparator { visible: bubble.isUser || bubble.who === "ai" }
+        MenuSeparator {
+            visible: bubbleMenu.currentMsgWho === "user"
+                  || bubbleMenu.currentMsgWho === "ai"
+        }
         // 编辑（仅 user）
         MenuItem {
             text: qsTr("编辑...")
-            visible: bubble.isUser
+            visible: bubbleMenu.currentMsgWho === "user"
             onTriggered: {
                 if (!bridge) return
-                // 简化：用 MessageDialog 输入新内容
-                editDialog.currentText = bubble.text || ""
-                editDialog.targetIndex = bubble.msgIndex
+                editDialog.currentText = bubbleMenu.currentMsgText
+                editDialog.targetIndex = bubbleMenu.currentMsgIndex
                 editDialog.open()
             }
         }
         // 重新生成（仅 ai）
         MenuItem {
             text: qsTr("重新生成")
-            visible: bubble.who === "ai"
+            visible: bubbleMenu.currentMsgWho === "ai"
             enabled: bridge !== undefined && bridge !== null && bridge.isBusy === false
-            onTriggered: {
-                if (!bridge) return
-                bridge.regenerate_ai_response(bubble.msgIndex)
-            }
+            onTriggered: if (bridge) bridge.regenerate_ai_response(bubbleMenu.currentMsgIndex)
         }
         MenuSeparator {}
         // 分享导出（所有类型）
         MenuItem {
             text: qsTr("分享导出")
-            onTriggered: if (bridge) bridge.share_bubble(bubble.msgIndex)
+            onTriggered: if (bridge) bridge.share_bubble(bubbleMenu.currentMsgIndex)
         }
         // 删除（所有类型，但 tool_* 很少单独删，统一给）
         MenuItem {
             text: qsTr("删除")
-            onTriggered: if (bridge) bridge.delete_bubble(bubble.msgIndex)
+            onTriggered: if (bridge) bridge.delete_bubble(bubbleMenu.currentMsgIndex)
         }
     }
 

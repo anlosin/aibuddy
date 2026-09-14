@@ -9,7 +9,13 @@ ApplicationWindow {
     height: 760
     title: "aibuddy (QtQuick Day 1-2 Demo)"
 
-    // ===== Day 20: 顶部 MenuBar（文件 / 编辑 / 视图 / 聊天 / 帮助）=====
+    // ===== Day 20: 顶部 MenuBar =====
+    // Day 20.3 精简：8 组（文件/编辑/视图/聊天/设置/模型/自动化/帮助）
+    // → 5 组（文件/编辑/视图/工具/帮助）。
+    //   - 「聊天」并入「工具」（含 4 个 chat 操作）
+    //   - 「设置 / 模型 / 自动化」合并为「工具」（含 5 个管理操作）
+    // 用户反馈"菜单栏菜单过多"——把功能相近的合并，主对话操作走快捷键
+    // / 三点菜单，主管理操作走「工具」分组。
     // 所有 action 走 bridge.* slot —— 已经在 chat_bridge.py 实现
     // 不引入新 QObject 局部变量（避免保活坑）
     // 所有 MenuItem enabled 都做 bridge 注入守卫（H5 教训）
@@ -26,10 +32,6 @@ ApplicationWindow {
                 enabled: bridge !== undefined && bridge !== null
                 onTriggered: {
                     if (!bridge) return
-                    // 用一个虚拟索引调用 share_bubble 不合适；改成逐条导出
-                    // 这里简化为：把所有 ai 气泡都导出到一个 markdown
-                    var hist = bridge.list_sessions()
-                    if (hist.length === 0) return
                     bridge.toast("请用气泡三点菜单的「分享」逐条导出")
                 }
             }
@@ -57,18 +59,20 @@ ApplicationWindow {
                 enabled: bridge !== undefined && bridge !== null && messageModel.count > 0
                 onTriggered: {
                     if (!bridge) return
-                    // 找最后一个 ai 气泡
                     var last = ""
                     for (var i = messageModel.count - 1; i >= 0; i--) {
                         var it = messageModel.get(i)
-                        if (it.who === "ai") {
-                            last = it.text
-                            break
-                        }
+                        if (it.who === "ai") { last = it.text; break }
                     }
                     if (last) bridge.copy_to_clipboard(last)
                     else bridge.toast("没有 AI 回答可复制")
                 }
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("偏好设置...")
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: if (bridge) bridge.show_settings_dialog()
             }
         }
         Menu {
@@ -79,8 +83,10 @@ ApplicationWindow {
                 onTriggered: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
             }
         }
+        // Day 20.3: 合并 4 组功能到「工具」菜单（chat / 模型 / 插件 / 自动化）
         Menu {
-            title: qsTr("&聊天")
+            title: qsTr("&工具")
+            // ── 对话操作（4 项，原「聊天」菜单） ──
             MenuItem {
                 text: qsTr("重新生成最后一条 AI 回答")
                 enabled: bridge !== undefined && bridge !== null && !bridge.isBusy && messageModel.count > 0
@@ -88,16 +94,10 @@ ApplicationWindow {
                     if (!bridge) return
                     var lastAi = -1
                     for (var i = messageModel.count - 1; i >= 0; i--) {
-                        if (messageModel.get(i).who === "ai") {
-                            lastAi = i
-                            break
-                        }
+                        if (messageModel.get(i).who === "ai") { lastAi = i; break }
                     }
-                    if (lastAi >= 0) {
-                        bridge.regenerate_ai_response(lastAi)
-                    } else {
-                        bridge.toast("没有 AI 回答可重新生成")
-                    }
+                    if (lastAi >= 0) bridge.regenerate_ai_response(lastAi)
+                    else bridge.toast("没有 AI 回答可重新生成")
                 }
             }
             MenuItem {
@@ -113,53 +113,33 @@ ApplicationWindow {
                     var last = ""
                     for (var i = messageModel.count - 1; i >= 0; i--) {
                         var it = messageModel.get(i)
-                        if (it.who === "ai") {
-                            last = it.text
-                            break
-                        }
+                        if (it.who === "ai") { last = it.text; break }
                     }
                     if (last) bridge.speak_text(last)
                 }
             }
-            MenuSeparator {}
             MenuItem {
                 text: qsTr("删除最后一条消息")
                 enabled: bridge !== undefined && bridge !== null && messageModel.count > 0
                 onTriggered: {
                     if (!bridge) return
-                    var idx = messageModel.count - 1
-                    bridge.delete_bubble(idx)
+                    bridge.delete_bubble(messageModel.count - 1)
                 }
             }
-        }
-        // Day 20.1: 补「设置 / 模型 / 自动化」3 组菜单（Day 20 工程师漏补）。
-        // 菜单项调 chat_bridge 5 个新 slot，由 slot 直接 spawn PyQt5 对话框
-        // （settings_dialog / automation_dialogs 在已有 QApplication 进程里能弹）。
-        Menu {
-            title: qsTr("&设置")
+            MenuSeparator {}
+            // ── 模型 / 插件 / 自动化（5 项，原「设置 / 模型 / 自动化」合并） ──
             MenuItem {
-                text: qsTr("模型设置...")
+                text: qsTr("模型管理...")
                 enabled: bridge !== undefined && bridge !== null
-                onTriggered: if (bridge) bridge.show_settings_dialog()
+                onTriggered: if (bridge) bridge.show_model_manager_dialog()
             }
             MenuItem {
                 text: qsTr("插件管理...")
                 enabled: bridge !== undefined && bridge !== null
                 onTriggered: if (bridge) bridge.show_plugin_manager_dialog()
             }
-        }
-        Menu {
-            title: qsTr("模&型")
             MenuItem {
-                text: qsTr("模型管理...")
-                enabled: bridge !== undefined && bridge !== null
-                onTriggered: if (bridge) bridge.show_model_manager_dialog()
-            }
-        }
-        Menu {
-            title: qsTr("&自动化")
-            MenuItem {
-                text: qsTr("任务管理...")
+                text: qsTr("自动化任务...")
                 enabled: bridge !== undefined && bridge !== null
                 onTriggered: if (bridge) bridge.show_automation_manager_dialog()
             }

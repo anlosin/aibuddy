@@ -1,13 +1,13 @@
-"""Day 20.1: QtQuick 路径补「设置 / 模型 / 自动化」菜单入口 + chat_bridge 5 slot。
+"""Day 20.1 + Day 20.3: QtQuick 路径菜单入口 + chat_bridge 5 slot。
 
-背景：Day 20 工程师补了 5 组菜单（文件/编辑/视图/聊天/帮助），
-但**漏了 PyQt5 chat_window.py 有的 3 组**：
-- 设置（模型设置 / 插件管理）
-- 模型（多模型快捷切换 + 管理）
-- 自动化（任务管理 / 立即检查）
-
-修复：chat_bridge 加 5 个 slot 直接调 PyQt5 对话框（同 QApplication 进程里弹），
-Main.qml 加 3 个新 Menu。
+历史：
+- Day 20.1: chat_bridge 加 5 个 slot（show_settings_dialog / show_model_manager_dialog
+  / show_plugin_manager_dialog / show_automation_manager_dialog / run_automation_check_due），
+  Main.qml 加「设置 / 模型 / 自动化」3 组菜单。
+- Day 20.3: 用户反馈「菜单栏菜单过多」（8 组），合并到 5 组（文件/编辑/视图/工具/帮助）：
+    * 「聊天」并入「工具」
+    * 「设置 / 模型 / 自动化」合并为「工具」
+  本文件同时覆盖两版结构的关键入口都存在（slot 不变 / 菜单结构以新版为准）。
 """
 import os
 import sys
@@ -29,23 +29,24 @@ class TestChatBridgeMenuSlots(unittest.TestCase):
         self.bridge = ChatBridge(theme="light")
 
     def test_show_settings_dialog_slot_exists(self):
-        """设置 > 模型设置：调 settings_dialog.show_settings(bridge)"""
+        """编辑 > 偏好设置：调 settings_dialog.show_settings(host)"""
         self.assertTrue(hasattr(self.bridge, "show_settings_dialog"))
         self.assertTrue(callable(self.bridge.show_settings_dialog))
-        # 不真弹对话框（offscreen QApplication 在 chat_bridge 模式下弹 dialog 会 crash）
-        # 只验证 slot 存在 + 可调用
-        # 真 GUI 测试由用户在真窗口验证
 
     def test_show_plugin_manager_dialog_slot_exists(self):
+        """工具 > 插件管理：调 settings_dialog.show_plugin_manager(host)"""
         self.assertTrue(hasattr(self.bridge, "show_plugin_manager_dialog"))
 
     def test_show_model_manager_dialog_slot_exists(self):
+        """工具 > 模型管理：调 settings_dialog.show_model_manager(host)"""
         self.assertTrue(hasattr(self.bridge, "show_model_manager_dialog"))
 
     def test_show_automation_manager_dialog_slot_exists(self):
+        """工具 > 自动化任务：调 automation_dialogs.show_automation_manager(host)"""
         self.assertTrue(hasattr(self.bridge, "show_automation_manager_dialog"))
 
     def test_run_automation_check_due_slot_exists(self):
+        """工具 > 立即检查：调 host.scheduler.check_due()"""
         self.assertTrue(hasattr(self.bridge, "run_automation_check_due"))
 
 
@@ -69,26 +70,50 @@ class TestChatBridgeSlotNoParams(unittest.TestCase):
 
 
 class TestMainQmlMenuStructure(unittest.TestCase):
-    """Main.qml 菜单栏必须含「设置 / 模型 / 自动化」3 组"""
+    """Day 20.3: Main.qml 菜单栏必须合并到 5 组：文件/编辑/视图/工具/帮助。
+    同时所有 5 个 slot 都必须被引用（防止 Day 20.1 漏补回归）。"""
 
     def setUp(self):
         self.src = open(os.path.join(_ROOT, "qwen_app", "qml", "Main.qml"),
                        encoding="utf-8").read()
 
-    def test_settings_menu_exists(self):
-        """设置菜单含 模型设置 / 插件管理"""
-        self.assertIn("&设置", self.src, "缺设置菜单")
-        self.assertIn("show_settings_dialog", self.src, "缺 show_settings 入口")
-        self.assertIn("show_plugin_manager_dialog", self.src, "缺 show_plugin_manager 入口")
+    def test_five_menus_consolidated(self):
+        """5 组菜单都存在"""
+        for menu in ["&文件", "&编辑", "&视图", "&工具", "&帮助"]:
+            self.assertIn(menu, self.src, f"缺菜单 {menu}")
 
-    def test_model_menu_exists(self):
-        self.assertIn("模&型", self.src, "缺模型菜单")
-        self.assertIn("show_model_manager_dialog", self.src, "缺 show_model_manager 入口")
+    def test_no_more_legacy_submenus(self):
+        """Day 20.1 拆分的 3 组（设置/模型/自动化）已合并到「工具」，
+        不能再有这些顶层 menu（避免用户又看到 8 个菜单）"""
+        for legacy in ['title: qsTr("&设置")', 'title: qsTr("模&型")',
+                       'title: qsTr("&自动化")']:
+            self.assertNotIn(legacy, self.src,
+                             f"{legacy} 已合并到「工具」，不应再独立成 menu")
 
-    def test_automation_menu_exists(self):
-        self.assertIn("&自动化", self.src, "缺自动化菜单")
-        self.assertIn("show_automation_manager_dialog", self.src, "缺自动化任务管理入口")
-        self.assertIn("run_automation_check_due", self.src, "缺立即检查入口")
+    def test_tools_menu_contains_all_management(self):
+        """「工具」菜单要包含：模型管理 / 插件管理 / 自动化任务 / 立即检查
+        + 4 项对话操作（重新生成 / 停止 / 朗读 / 删除）"""
+        for entry in ["show_model_manager_dialog", "show_plugin_manager_dialog",
+                      "show_automation_manager_dialog", "run_automation_check_due",
+                      "regenerate_ai_response", "stop_chat", "speak_text", "delete_bubble"]:
+            self.assertIn(entry, self.src, f"「工具」菜单缺 {entry} 入口")
+
+    def test_edit_menu_has_preferences(self):
+        """「编辑」菜单的「偏好设置...」调 show_settings_dialog（从「设置」合并进来）"""
+        self.assertIn("show_settings_dialog", self.src,
+                      "「编辑 > 偏好设置」是 show_settings_dialog 的新入口")
+
+    def test_edit_preferences_nearby(self):
+        """show_settings_dialog 必须出现在「编辑」menu 的 MenuItem 里（不能仅
+        出现在「设置」 menu —— 那就是合并失败）"""
+        import re
+        # 找编辑 menu：&编辑 → 下一个 &开头 menu 或 } 之间的内容
+        m = re.search(r'title:\s*qsTr\("&编辑"\).*?(?=title:\s*qsTr\("&|\Z)',
+                      self.src, re.DOTALL)
+        self.assertIsNotNone(m, "找不到编辑 menu 段")
+        edit_block = m.group(0)
+        self.assertIn("show_settings_dialog", edit_block,
+                      "show_settings_dialog 必须出现在「编辑」menu 内")
 
 
 if __name__ == "__main__":

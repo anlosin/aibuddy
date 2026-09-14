@@ -123,19 +123,35 @@ class TestDay20MessageBubbleComponents(unittest.TestCase):
             "MessageBubble.qml 缺失以下 bridge.* slot 调用：%s" % missing)
 
     def test_conditional_menu_items_have_visibility_guards(self):
-        """条件菜单项必须有 visible / enabled 守卫（按 who 类型）"""
-        # 编辑项 visible: bubble.isUser
-        self.assertRegex(self.src, r"visible:\s*bubble\.isUser",
-                         "「编辑」菜单项缺 isUser 守卫")
-        # 重新生成 visible: bubble.who === \"ai\"
-        self.assertRegex(self.src, r"visible:\s*bubble\.who\s*===\s*\"ai\"",
-                         "「重新生成」菜单项缺 ai 守卫")
-        # 引用 / 朗读 visible: !bubble.isTool
-        self.assertIn("!bubble.isTool", self.src,
-                      "「引用/朗读」菜单项缺 !isTool 守卫")
-        # 复制代码 visible: bubble.hasCode
-        self.assertRegex(self.src, r"visible:\s*bubble\.hasCode",
-                         "「复制代码」菜单项缺 hasCode 守卫")
+        """条件菜单项必须有 visible / enabled 守卫（按 who 类型）。
+
+        Day 20.3 修复：MenuItem 不再直接引用 bubble.*（跨 Popup window scope 失效），
+        改为读 bubbleMenu.currentMsgXxx 缓存属性。守卫表达式同步改写。
+        """
+        # 编辑项 visible: bubbleMenu.currentMsgWho === "user"
+        self.assertRegex(self.src, r"visible:[\s\S]{0,30}currentMsgWho\s*===\s*\"user\"",
+                         "「编辑」菜单项缺 currentMsgWho=user 守卫")
+        # 重新生成 visible: bubbleMenu.currentMsgWho === "ai"
+        self.assertRegex(self.src, r"visible:[\s\S]{0,30}currentMsgWho\s*===\s*\"ai\"",
+                         "「重新生成」菜单项缺 currentMsgWho=ai 守卫")
+        # 引用 / 朗读 visible: currentMsgWho !== "tool_call" && !== "tool_result"
+        self.assertIn('currentMsgWho !== "tool_call"', self.src,
+                      "「引用/朗读」菜单项缺 tool_call 排除守卫")
+        self.assertIn('currentMsgWho !== "tool_result"', self.src,
+                      "「引用/朗读」菜单项缺 tool_result 排除守卫")
+        # 复制代码 visible: bubbleMenu.currentMsgHasCode
+        self.assertRegex(self.src, r"visible:[\s\S]{0,30}currentMsgHasCode",
+                         "「复制代码」菜单项缺 currentMsgHasCode 守卫")
+
+    def test_menu_uses_cached_properties(self):
+        """Day 20.3: 三点按钮 onClicked 必须把气泡数据缓存到 Menu 属性，
+        避免 MenuItem 跨 Popup window scope 引用 bubble.* 失效。"""
+        # onClicked 内必须有 currentMsgText / currentMsgCode / currentMsgWho
+        # / currentMsgIndex / currentMsgHasCode 五处赋值
+        for prop in ["currentMsgText =", "currentMsgCode =", "currentMsgWho =",
+                     "currentMsgIndex =", "currentMsgHasCode ="]:
+            self.assertIn(prop, self.src,
+                          f"onClicked 必须给 bubbleMenu.{prop} 赋值")
 
 
 class TestMainQmlMenuBarComponents(unittest.TestCase):
@@ -151,9 +167,14 @@ class TestMainQmlMenuBarComponents(unittest.TestCase):
                          "Main.qml 缺 menuBar: MenuBar { ... }")
 
     def test_has_five_menus(self):
-        """5 组菜单：文件 / 编辑 / 视图 / 聊天 / 帮助"""
-        for title in ["&文件", "&编辑", "&视图", "&聊天", "&帮助"]:
+        """Day 20.3: 5 组菜单：文件 / 编辑 / 视图 / 工具 / 帮助（聊天已并入工具）"""
+        for title in ["&文件", "&编辑", "&视图", "&工具", "&帮助"]:
             self.assertIn(title, self.src, "Menu 缺 title '%s'" % title)
+
+    def test_no_legacy_chat_menu(self):
+        """Day 20.3: 「&聊天」menu 已合并到「&工具」，不应再独立"""
+        self.assertNotIn('title: qsTr("&聊天")', self.src,
+                         "「聊天」menu 已合并到「工具」，不应再独立")
 
     def test_has_toast_box(self):
         """toastBox + onToast handler 必须存在"""

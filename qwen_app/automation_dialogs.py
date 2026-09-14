@@ -8,6 +8,10 @@
   支持按结果筛选、关键词搜索、概览统计、复制全文、Markdown 高亮。
 
 这些对话框仅通过 parent.scheduler 访问调度器，与 ChatWindow 其它状态解耦。
+
+Day 20.3：补 show_automation_manager(host) 工厂入口，供 QtQuick 路径通过
+chat_bridge 的 _DialogHost 调用（跟 settings_dialog.show_* 同一套模式）。
+PyQt5 路径仍然走 chat_window.ChatWindow.show_automation_manager 实例方法。
 """
 
 import threading
@@ -738,3 +742,17 @@ class LogViewDialog(QDialog):
         cb = self.view.clipboard()
         cb.setText(text)
         QMessageBox.information(self, "已复制", "当前执行记录全文已复制到剪贴板")
+
+
+# ────────────────────────────────────────────────────────────
+# Day 20.3: 工厂入口（QtQuick 路径用）
+# ────────────────────────────────────────────────────────────
+def show_automation_manager(host):
+    """弹出「自动化任务管理」对话框。
+
+    host 必须是带 ``scheduler`` 属性的对象（PyQt5 ChatWindow 或 QtQuick
+    _DialogHost 都满足）。模态阻塞 exec_()，关闭后自动从 scheduler.off_finished
+    注销回调（AutomationManagerDialog.closeEvent 已处理）。
+    """
+    dlg = AutomationManagerDialog(host)
+    dlg.exec_()

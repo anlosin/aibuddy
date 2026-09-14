@@ -271,3 +271,52 @@ class _DialogHost(QWidget):
                 f"已切换模型 → {label}（{m.get('model_id', '')} @ {m.get('base_url', '')}）",
                 "system",
             )
+
+    # ────── 自动化调度器（Day 20.3 补） ──────
+    # QtQuick 路径下 bridge 没有 ChatWindow 那种 chat_client / model_id 实例字段，
+    # 也没启动 Scheduler。AutomationManagerDialog 依赖 ``parent.scheduler``，
+    # 没有就 AttributeError。这里按 scheduler_run.py 的 standalone 模式懒构造一个
+    # Scheduler（client / model_id 在构造时固定，不跟随主模型切换动态更新），
+    # 并启动 30s 定时器跑 check_due，与 ChatWindow 行为对齐。
+    @property
+    def scheduler(self):
+        sch = getattr(self._b, "_scheduler", None)
+        if sch is not None:
+            return sch
+        try:
+            from .scheduler import Scheduler
+            from .plugin_manager import discover_plugins
+            from PyQt5.QtCore import QTimer
+            cur = self._cur_model()
+            try:
+                client = _config.make_openai_client(
+                    cur.get("api_key", ""),
+                    cur.get("base_url", ""),
+                    cur.get("proxy", ""),
+                )
+            except Exception:
+                # 客户端构建失败（key/url 缺失）—— 用 None，scheduler 内部兜底
+                client = None
+            plugins, _ = discover_plugins()
+            enabled = [p for p in _config.load_plugin_state() if p in plugins]
+            sch = Scheduler(
+                client=client,
+                model_id=cur.get("model_id", "") or "mock-qwen",
+                plugins=plugins,
+                enabled_plugins=enabled,
+                enable_thinking=self.enable_thinking,
+                enable_tools=self.enable_tools,
+                max_rounds=self.max_agent_rounds,
+            )
+            self._b._scheduler = sch
+            # 30s 定时 check_due（与 chat_window._sched_timer 一致）
+            timer = QTimer(self._b)
+            timer.setInterval(30000)
+            timer.timeout.connect(sch.check_due)
+            timer.start()
+            self._b._sched_timer = timer
+            return sch
+        except Exception as e:
+            # 兜底：构造失败也要让对话框能弹（带空列表）
+            print(f"[dialog_host] 懒构造 Scheduler 失败: {e}")
+            return None

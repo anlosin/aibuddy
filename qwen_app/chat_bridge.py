@@ -1390,31 +1390,40 @@ class ChatBridge(QObject):
 
     @pyqtSlot()
     def show_automation_manager_dialog(self):
-        """Day 20.1: QtQuick 菜单栏「自动化 > 任务管理」入口
+        """Day 20.1/20.3: QtQuick 菜单栏「工具 > 任务管理」入口
 
-        注意：automation_dialogs 当前空模块（line 0），所以这里
-        直接 toast 提示 + 暴露 scheduler.check_due() 立即检查入口。
+        Day 20.1 时 automation_dialogs.py 是空模块，slot 只能 toast 占位。
+        Day 20.3: automation_dialogs 补了 ``show_automation_manager(host)`` 工厂
+        （跟 settings_dialog.show_* 同一套模式），host 走 _DialogHost，会按
+        standalone 模式懒构造 Scheduler（与 chat_window 的 chat_scheduler 行为
+        对齐：30s 定时 + 立即 check_due）。
         """
         try:
-            from . import automation_dialogs as ad
-            if hasattr(ad, "show_automation_manager"):
-                ad.show_automation_manager(self)
-            else:
-                # 模块没实现，给个桩
-                self.toast.emit("自动化任务管理 UI 待补完；当前可点「立即检查」")
+            host = self._get_dialog_host()
+            if host is None:
+                self.toast.emit("QApplication 未就绪")
+                return
+            from .automation_dialogs import show_automation_manager
+            show_automation_manager(host)
         except Exception as e:
             print(f"[chat_bridge] show_automation_manager 失败: {e}")
             self.toast.emit(f"打开自动化管理失败: {e}")
 
     @pyqtSlot()
     def run_automation_check_due(self):
-        """Day 20.1: QtQuick 菜单栏「自动化 > 立即检查并执行到期任务」入口"""
+        """Day 20.1/20.3: 菜单栏「工具 > 立即检查」入口
+
+        复用 _DialogHost.scheduler 懒构造（与 show_automation_manager_dialog
+        共享同一个 Scheduler 实例）。如果用户在打开「任务管理」之前就点了
+        「立即检查」，host.scheduler 会在这里第一次触发懒构造。
+        """
         try:
-            if hasattr(self, "_scheduler"):
-                self._scheduler.check_due()
-                self.toast.emit("已触发到期任务检查")
-            else:
-                self.toast.emit("调度器未初始化")
+            host = self._get_dialog_host()
+            if host is None or host.scheduler is None:
+                self.toast.emit("调度器未启动")
+                return
+            host.scheduler.check_due()
+            self.toast.emit("已触发到期任务检查")
         except Exception as e:
             print(f"[chat_bridge] run_automation_check_due 失败: {e}")
             self.toast.emit(f"检查任务失败: {e}")
