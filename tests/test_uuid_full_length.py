@@ -45,9 +45,12 @@ class TestNoUUIDTruncation(unittest.TestCase):
         )
 
     def test_chat_bridge_uses_full_uuid(self):
-        """chat_bridge.py: create_session 不再用 [:8] 截断。"""
+        """chat_bridge 模块组: create_session 不再用 [:8] 截断。
+
+        拆分后 create_session 位于 _bridge_session.py —— 扫描目标随之更新。
+        """
         self._scan_file_for_truncated_uuid(
-            os.path.join(_ROOT, "qwen_app", "chat_bridge.py"),
+            os.path.join(_ROOT, "qwen_app", "_bridge_session.py"),
             r"_uuid\.uuid4\(\)",
         )
 
