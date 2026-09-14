@@ -703,10 +703,13 @@ ApplicationWindow {
                                         //    MessageBubble.qml 同一坑）
                                         sessionMenu.currentConvId = model.convId
                                         sessionMenu.currentConvName = model.name
-                                        // 3) 屏幕绝对坐标：菜单右边缘对齐 three-dot 右边缘
-                                        var pt = moreBtn.mapToItem(null, moreBtn.width, 0)
+                                        // 3) 定位：Menu.x / Menu.y 是 sessionMenu.parent
+                                        //    的局部坐标，所以 mapToItem 要以 parent 为目标，
+                                        //    不能用 null（null 是全局屏幕坐标，差一个 sidebar 偏移）
+                                        var pt = moreBtn.mapToItem(sessionMenu.parent,
+                                                                   moreBtn.width, moreBtn.height)
                                         sessionMenu.x = pt.x - sessionMenu.width + moreBtn.width
-                                        sessionMenu.y = pt.y + moreBtn.height + 2
+                                        sessionMenu.y = pt.y + 2
                                         sessionMenu.popup()
                                     }
                                 }

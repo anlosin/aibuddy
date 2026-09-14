@@ -794,18 +794,35 @@ class ChatBridge(QObject):
 
     @pyqtSlot(str)
     def load_session(self, conv_id):
-        """加载会话历史 -> emit sessionLoaded(conv_id, history) -> QML 重填 messageModel"""
+        """加载会话历史 -> emit sessionLoaded(conv_id, history) -> QML 重填 messageModel
+
+        Day 20.4 修复：必须同时
+          1) 更新 _config 的 current_id（list_sessions 用这个判断 sel）
+          2) emit sessionListChanged（让侧边栏 highlight 移到新会话）
+        否则点新会话 → messageModel 更新但蓝色高亮仍停在旧会话，用户
+        视觉上感觉「没切」。
+        """
+        if not conv_id:
+            return
         try:
-            convs, _ = _config.load_conversations()
+            convs, current_id = _config.load_conversations()
         except Exception:
             return
         conv = next((c for c in convs if c["id"] == conv_id), None)
         if not conv:
             return
         self._current_conv_id = conv_id
+        # 持久化 current_id（让 list_sessions().sel 反映新选择）
+        if current_id != conv_id:
+            try:
+                _config.save_conversations(convs, conv_id)
+            except Exception:
+                pass  # 持久化失败不影响加载
         # history 字段是 [{role: 'user'|'assistant'|'system', content: '...'}]
         history = conv.get("history", []) or []
         self.sessionLoaded.emit(conv_id, history)
+        # 通知侧边栏 highlight 跟随移动
+        self.sessionListChanged.emit()
 
     @staticmethod
     def _relative_time_str(iso_str):
