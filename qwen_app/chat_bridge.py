@@ -741,6 +741,57 @@ class ChatBridge(QObject):
             self._current_conv_id = new_cur
         self.sessionListChanged.emit()
 
+    @pyqtSlot(str, str, result=bool)
+    def rename_session(self, conv_id, new_title):
+        """Day 20.4: 重命名会话。空字符串 / 仅空白 → 拒绝并 toast。
+
+        - 单条 write（不重写全表），跟 delete_bubble 一致
+        - 成功后 emit sessionListChanged 让 QML 刷新侧边栏
+        """
+        new_title = (new_title or "").strip()
+        if not new_title:
+            self._toast("会话名不能为空")
+            return False
+        if not conv_id:
+            return False
+        try:
+            convs, _ = _config.load_conversations()
+        except Exception:
+            return False
+        target = next((c for c in convs if c["id"] == conv_id), None)
+        if target is None:
+            self._toast("找不到该会话")
+            return False
+        target["title"] = new_title
+        _config.save_single_conversation(target, conv_id)
+        self.sessionListChanged.emit()
+        return True
+
+    @pyqtSlot(str, result=bool)
+    def clear_session_history(self, conv_id):
+        """Day 20.4: 清空指定会话的历史（保留会话本身）
+
+        - 等价于 PyQt5 路径的「清空消息」按钮（chat_window 行为）
+        - 如果清的是当前会话，emit sessionLoaded(空 list) 让 QML 清空 messageModel
+        """
+        if not conv_id:
+            return False
+        try:
+            convs, _ = _config.load_conversations()
+        except Exception:
+            return False
+        target = next((c for c in convs if c["id"] == conv_id), None)
+        if target is None:
+            self._toast("找不到该会话")
+            return False
+        target["history"] = []
+        _config.save_single_conversation(target, conv_id)
+        if self._current_conv_id == conv_id:
+            # 当前会话被清空 → QML 端 messageModel 也得清
+            self.sessionLoaded.emit(conv_id, [])
+        self._toast("已清空会话消息")
+        return True
+
     @pyqtSlot(str)
     def load_session(self, conv_id):
         """加载会话历史 -> emit sessionLoaded(conv_id, history) -> QML 重填 messageModel"""

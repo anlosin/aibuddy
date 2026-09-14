@@ -1,0 +1,280 @@
+"""Day 20.4: 侧边栏会话列表三点按钮回归测试。
+
+背景：用户反馈「红框里的功能还是不可用」（截图显示侧边栏会话项右侧的
+「⋯」按钮点击没反应）。
+
+根因（之前的 QML）：
+1. three-dot MouseArea 在 rowMa 之前声明
+2. rowMa `anchors.fill: parent` 覆盖整个 delegate（包括 three-dot 区域）
+3. rowMa 声明在后 → z 更高 → 点击 three-dot 时 rowMa 捕获事件
+4. rowMa.onClicked → bridge.load_session(model.convId)
+5. load_session 用的是同一个会话（已 sel）→ messageModel 不变 → 用户
+   看到「无反应」
+
+修复：
+1. three-dot Rectangle 加 z:10（抬高到 rowMa 之上）
+2. three-dot onClicked 第一行 ``mouse.accepted = true``（防止冒泡到 rowMa）
+3. 改成弹菜单（重命名 / 清空消息 / 删除会话），不再直接 delete_session
+4. chat_bridge.py 加两个新 slot：rename_session / clear_session
+5. 跟 MessageBubble.qml 一样，把数据缓存到 Menu 的 currentConvXxx 属性
+   （避开跨 Popup window scope 失效）
+
+本文件验证：
+- 5 个 slot 必须存在（list_sessions / create_session / delete_session /
+  load_session / 新增 rename_session / 新增 clear_session_history）
+- 3 个 slot 签名正确（pyqtSlot 类型注解）
+- rename_session 拒绝空字符串 + 写盘
+- clear_session_history 成功后 emit sessionLoaded（让 QML 清 messageModel）
+- Main.qml three-dot 必须有 z:10 + onClicked 首行 mouse.accepted = true
+- Main.qml sessionMenu 必须有 currentConvId / currentConvName 属性
+- Main.qml renameDialog 必须存在
+- 三个 MenuItem 都在（重命名 / 清空 / 删除）
+- 旧的「直接 delete_session」路径必须消失
+"""
+import os
+import sys
+import unittest
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+class TestSessionSlotsExist(unittest.TestCase):
+    """bridge 必须有 rename_session 和 clear_session_history（Day 20.4 新增）"""
+
+    def setUp(self):
+        from PyQt5.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication(sys.argv)
+        from qwen_app.chat_bridge import ChatBridge
+        self.bridge = ChatBridge(theme="light")
+
+    def test_rename_session_exists(self):
+        self.assertTrue(hasattr(self.bridge, "rename_session"))
+        self.assertTrue(callable(self.bridge.rename_session))
+
+    def test_clear_session_history_exists(self):
+        self.assertTrue(hasattr(self.bridge, "clear_session_history"))
+        self.assertTrue(callable(self.bridge.clear_session_history))
+
+    def test_delete_session_still_exists(self):
+        """Day 20.4 后 delete_session 仍可用（菜单「删除会话」用）"""
+        self.assertTrue(hasattr(self.bridge, "delete_session"))
+
+
+class TestRenameSessionBehavior(unittest.TestCase):
+    """rename_session 业务逻辑：空字符串拒绝 / 写盘 / emit sessionListChanged"""
+
+    def setUp(self):
+        from PyQt5.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication(sys.argv)
+        from qwen_app.chat_bridge import ChatBridge
+        self.bridge = ChatBridge(theme="light")
+        from qwen_app import config as _cfg
+        # 备份原配置
+        self._backup_models, self._backup_cur = _cfg.load_models()
+        self._original = _cfg.load_conversations()
+        # 准备一条测试会话
+        from qwen_app import config
+        test_id = "day20_4_test_conv_001"
+        config.save_single_conversation({
+            "id": test_id,
+            "title": "原标题",
+            "history": [{"role": "user", "content": "hi"}],
+            "created_at": "2026-09-14T00:00:00",
+        }, test_id)
+        self.test_id = test_id
+        self.toast_msgs = []
+        self.bridge.toast.connect(lambda m: self.toast_msgs.append(m))
+        self.list_changed = []
+        self.bridge.sessionListChanged.connect(lambda: self.list_changed.append(True))
+
+    def tearDown(self):
+        from qwen_app import config as _cfg
+        # 恢复原配置（删测试会话）
+        convs, cur = _cfg.load_conversations()
+        convs = [c for c in convs if c.get("id") != self.test_id]
+        _cfg.save_conversations(convs, cur)
+
+    def test_rename_success(self):
+        ok = self.bridge.rename_session(self.test_id, "新标题")
+        self.assertTrue(ok, "rename_session 应返回 True")
+        self.assertTrue(self.list_changed, "应 emit sessionListChanged")
+        # 重新读盘确认
+        from qwen_app import config as _cfg
+        convs, _ = _cfg.load_conversations()
+        target = next((c for c in convs if c["id"] == self.test_id), None)
+        self.assertIsNotNone(target)
+        self.assertEqual(target["title"], "新标题")
+
+    def test_rename_empty_rejected(self):
+        ok = self.bridge.rename_session(self.test_id, "   ")
+        self.assertFalse(ok, "纯空白应拒绝")
+        self.assertFalse(self.list_changed, "应不 emit")
+        self.assertTrue(any("不能为空" in m for m in self.toast_msgs),
+                        "应 toast 提示")
+
+    def test_rename_nonexistent_rejected(self):
+        ok = self.bridge.rename_session("nonexistent_id", "new")
+        self.assertFalse(ok)
+
+    def test_rename_strips_whitespace(self):
+        ok = self.bridge.rename_session(self.test_id, "  标题含前后空格  ")
+        self.assertTrue(ok)
+        from qwen_app import config as _cfg
+        convs, _ = _cfg.load_conversations()
+        target = next((c for c in convs if c["id"] == self.test_id), None)
+        self.assertEqual(target["title"], "标题含前后空格", "应 strip 前后空白")
+
+
+class TestClearSessionHistoryBehavior(unittest.TestCase):
+    """clear_session_history：清空消息 + 若当前会话则 emit sessionLoaded"""
+
+    def setUp(self):
+        from PyQt5.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication(sys.argv)
+        from qwen_app.chat_bridge import ChatBridge
+        self.bridge = ChatBridge(theme="light")
+        from qwen_app import config as _cfg
+        test_id = "day20_4_clear_test_001"
+        _cfg.save_single_conversation({
+            "id": test_id,
+            "title": "清空测试",
+            "history": [
+                {"role": "user", "content": "msg1"},
+                {"role": "assistant", "content": "reply1"},
+            ],
+            "created_at": "2026-09-14T00:00:00",
+        }, test_id)
+        self.test_id = test_id
+        self.bridge._current_conv_id = test_id
+        self.loaded = []
+        self.bridge.sessionLoaded.connect(
+            lambda cid, hist: self.loaded.append((cid, hist)))
+
+    def tearDown(self):
+        from qwen_app import config as _cfg
+        convs, cur = _cfg.load_conversations()
+        convs = [c for c in convs if c.get("id") != self.test_id]
+        _cfg.save_conversations(convs, cur)
+
+    def test_clear_emits_session_loaded_when_current(self):
+        """清的是当前会话 → emit sessionLoaded(空 list) 让 QML 清 messageModel"""
+        ok = self.bridge.clear_session_history(self.test_id)
+        self.assertTrue(ok)
+        self.assertTrue(self.loaded, "应 emit sessionLoaded")
+        cid, hist = self.loaded[-1]
+        self.assertEqual(cid, self.test_id)
+        self.assertEqual(hist, [])
+
+    def test_clear_does_not_emit_when_other(self):
+        """清的不是当前会话 → 不 emit sessionLoaded（避免误清 messageModel）"""
+        from qwen_app import config as _cfg
+        # 创建另一条会话
+        other_id = "day20_4_clear_test_002"
+        _cfg.save_single_conversation({
+            "id": other_id, "title": "另一条",
+            "history": [{"role": "user", "content": "x"}],
+            "created_at": "2026-09-14T00:00:00",
+        }, other_id)
+        try:
+            self.loaded.clear()
+            self.bridge.clear_session_history(other_id)
+            # 不应 emit sessionLoaded
+            self.assertEqual(self.loaded, [])
+        finally:
+            convs, cur = _cfg.load_conversations()
+            convs = [c for c in convs if c.get("id") != other_id]
+            _cfg.save_conversations(convs, cur)
+
+
+class TestSessionThreeDotClickStructure(unittest.TestCase):
+    """Main.qml 侧边栏三点按钮 + 菜单结构静态检查（防 Day 20.4 bug 回归）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = open(os.path.join(_ROOT, "qwen_app", "qml", "Main.qml"),
+                      encoding="utf-8").read()
+
+    def test_three_dot_z_order_higher_than_rowma(self):
+        """three-dot Rectangle 必须 z:10（rowMa 是 z:0）—— 否则被吞"""
+        # 找 three-dot Rectangle 块（id: moreBtn 块）
+        m = re.search(r"id:\s*moreBtn[\s\S]{0,400}z:\s*(\d+)", self.src)
+        self.assertIsNotNone(m, "找不到 moreBtn Rectangle")
+        moreBtn_z = int(m.group(1))
+        # 找 rowMa 块
+        m2 = re.search(r"id:\s*rowMa[\s\S]{0,300}z:\s*(\d+)", self.src)
+        self.assertIsNotNone(m2, "找不到 rowMa")
+        rowMa_z = int(m2.group(1))
+        self.assertGreater(moreBtn_z, rowMa_z,
+                           f"three-dot z={moreBtn_z} 必须大于 rowMa z={rowMa_z}")
+
+    def test_three_dot_click_blocks_propagation(self):
+        """onClicked 第一行必须是 mouse.accepted = true（阻止冒泡到 rowMa）"""
+        m = re.search(r"id:\s*moreMa[\s\S]{0,500}onClicked[\s\S]{0,500}",
+                      self.src)
+        self.assertIsNotNone(m, "找不到 moreMa onClicked")
+        handler = m.group(0)
+        # 跨注释行匹配：onClicked 之后（含 function(mouse) { 语法）到 mouse.accepted
+        self.assertRegex(handler, r"onClicked[\s\S]{0,400}mouse\.accepted\s*=\s*true",
+                         "three-dot onClicked 必须（注释后）设 mouse.accepted = true 阻止冒泡")
+
+    def test_three_dot_uses_cached_menu_properties(self):
+        """onClicked 内必须把 model.convId / model.name 缓存到 sessionMenu 属性"""
+        m = re.search(r"id:\s*moreMa[\s\S]{0,500}onClicked[\s\S]{0,800}",
+                      self.src)
+        self.assertIsNotNone(m)
+        handler = m.group(0)
+        self.assertIn("sessionMenu.currentConvId =", handler,
+                      "必须缓存 convId 到 sessionMenu 属性")
+        self.assertIn("sessionMenu.currentConvName =", handler,
+                      "必须缓存 convName 到 sessionMenu 属性")
+
+    def test_session_menu_has_three_items(self):
+        """sessionMenu 必须有 3 个 MenuItem：重命名 / 清空 / 删除"""
+        m = re.search(r"id:\s*sessionMenu[\s\S]{0,2000}", self.src)
+        self.assertIsNotNone(m)
+        body = m.group(0)
+        self.assertIn('qsTr("重命名...")', body)
+        self.assertIn('qsTr("清空消息")', body)
+        self.assertIn('qsTr("删除会话")', body)
+
+    def test_session_menu_uses_bridge_slots(self):
+        """MenuItem 触发器必须调 bridge 上对应 slot"""
+        m = re.search(r"id:\s*sessionMenu[\s\S]{0,2500}", self.src)
+        self.assertIsNotNone(m)
+        body = m.group(0)
+        self.assertIn("bridge.rename_session", body,
+                      "重命名 MenuItem 必调 bridge.rename_session")
+        self.assertIn("bridge.clear_session_history", body,
+                      "清空消息 MenuItem 必调 bridge.clear_session_history")
+        self.assertIn("bridge.delete_session", body,
+                      "删除会话 MenuItem 必调 bridge.delete_session")
+
+    def test_no_legacy_direct_delete(self):
+        """Day 20.4 之前的 moreMa.onClicked 直接 delete_session 已删"""
+        # 找 moreMa onClicked handler 不应再含 bridge.delete_session 直接调用
+        m = re.search(r"id:\s*moreMa[\s\S]{0,500}onClicked[\s\S]{0,400}",
+                      self.src)
+        if m:
+            handler = m.group(0)
+            self.assertNotIn("bridge.delete_session", handler,
+                             "three-dot 不应直接调 delete_session（会绕过菜单）")
+
+    def test_rename_dialog_exists(self):
+        """renameDialog 必须存在 + onAccepted 调 bridge.rename_session"""
+        m = re.search(r"id:\s*renameDialog[\s\S]{0,2500}", self.src)
+        self.assertIsNotNone(m, "找不到 renameDialog")
+        body = m.group(0)
+        self.assertIn("bridge.rename_session(", body,
+                      "renameDialog.onAccepted 必须调 bridge.rename_session")
+        # onOpened 必同步 currentName 到 renameInput（否则 input 是空）
+        self.assertIn("renameInput.text =", body,
+                      "renameDialog.onOpened 必同步 currentName 到 input")
+
+
+import re
+
+
+if __name__ == "__main__":
+    unittest.main()

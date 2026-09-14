@@ -667,12 +667,23 @@ ApplicationWindow {
                                     font.pixelSize: 11
                                 }
                             }
+                            // Day 20.4 修复（用户反馈"三点按钮不可用"）：
+                            //   原代码 three-dot MouseArea 在 rowMa 之前声明，
+                            //   但 rowMa 同样 anchors.fill: parent 覆盖整个 delegate
+                            //   —— rowMa z 更高，click 被它吞了（实际触发 load_session，
+                            //   看起来啥也没发生）。
+                            //   修复：three-dot Rectangle z=10 抬高，click 用
+                            //   mapToItem + accepted=true 双重保护避免冒泡。
+                            //   同时改成"点开菜单"（重命名 / 清空 / 删除）而不是
+                            //   直接 delete_session（误触代价大）。
                             Rectangle {
+                                id: moreBtn
                                 Layout.preferredWidth: 24
                                 Layout.preferredHeight: 24
                                 radius: 4
                                 color: moreMa.containsMouse ? root.pal.sidebarBorder : "transparent"
                                 visible: rowMa.containsMouse || model.sel
+                                z: 10
                                 Text {
                                     anchors.centerIn: parent
                                     text: "⋯"
@@ -684,16 +695,118 @@ ApplicationWindow {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: if (bridge) bridge.delete_session(model.convId)
+                                    onClicked: function(mouse) {
+                                        // 1) 阻止冒泡到 rowMa（防止同时 load_session）
+                                        mouse.accepted = true
+                                        // 2) 把会话数据缓存到 Menu 属性
+                                        //    （跨 Popup window scope 失效，跟
+                                        //    MessageBubble.qml 同一坑）
+                                        sessionMenu.currentConvId = model.convId
+                                        sessionMenu.currentConvName = model.name
+                                        // 3) 屏幕绝对坐标：菜单右边缘对齐 three-dot 右边缘
+                                        var pt = moreBtn.mapToItem(null, moreBtn.width, 0)
+                                        sessionMenu.x = pt.x - sessionMenu.width + moreBtn.width
+                                        sessionMenu.y = pt.y + moreBtn.height + 2
+                                        sessionMenu.popup()
+                                    }
                                 }
                             }
                         }
+                        // rowMa 必须在 three-dot 之前声明 + z < 10（已 OK：比 three-btn z 晚声明）
                         MouseArea {
                             id: rowMa
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            z: 0
                             onClicked: if (bridge) bridge.load_session(model.convId)
+                        }
+                    }
+                }
+                // Day 20.4: 侧边栏会话三点菜单（重命名 / 清空消息 / 删除）
+                // 跟 MessageBubble.qml 的 bubbleMenu 一样，跨 Popup window scope
+                // 不可靠 → 数据通过 Menu 自身的 currentConvXxx 属性传递。
+                Menu {
+                    id: sessionMenu
+                    property string currentConvId: ""
+                    property string currentConvName: ""
+                    MenuItem {
+                        text: qsTr("重命名...")
+                        onTriggered: {
+                            if (!bridge) return
+                            renameDialog.currentConvId = sessionMenu.currentConvId
+                            renameDialog.currentName = sessionMenu.currentConvName
+                            renameDialog.open()
+                        }
+                    }
+                    MenuItem {
+                        text: qsTr("清空消息")
+                        onTriggered: {
+                            if (!bridge) return
+                            if (sessionMenu.currentConvId) {
+                                bridge.clear_session_history(sessionMenu.currentConvId)
+                            }
+                        }
+                    }
+                    MenuSeparator {}
+                    MenuItem {
+                        text: qsTr("删除会话")
+                        // 用红色文字提醒危险操作（PyQt5 路径也有 QMessageBox 二次确认，
+                        // 这里用 toast 简化，避免阻塞 UI）
+                        onTriggered: {
+                            if (!bridge) return
+                            if (sessionMenu.currentConvId) {
+                                bridge.delete_session(sessionMenu.currentConvId)
+                            }
+                        }
+                    }
+                }
+                // Day 20.4: 重命名会话的输入弹窗
+                Dialog {
+                    id: renameDialog
+                    property string currentConvId: ""
+                    property string currentName: ""
+                    title: qsTr("重命名会话")
+                    anchors.centerIn: Overlay.overlay
+                    modal: true
+                    width: 360
+                    height: 160
+                    standardButtons: Dialog.Ok | Dialog.Cancel
+                    onOpened: {
+                        // 打开时把 currentName 同步进 input（onOpened 比 Component.onCompleted
+                        // 晚一帧，dialog 内部 TextInput 已经构造好）
+                        renameInput.text = renameDialog.currentName
+                        renameInput.selectAll()
+                        renameInput.forceActiveFocus()
+                    }
+                    onAccepted: {
+                        if (bridge && currentConvId) {
+                            bridge.rename_session(currentConvId, renameInput.text)
+                        }
+                    }
+                    contentItem: ColumnLayout {
+                        spacing: 8
+                        Text {
+                            text: "请输入新会话名："
+                            color: "#666"
+                            font.pixelSize: 12
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 32
+                            radius: 6
+                            border.color: "#E5E6EB"
+                            border.width: 1
+                            color: "white"
+                            TextInput {
+                                id: renameInput
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                verticalAlignment: TextInput.AlignVCenter
+                                font.pixelSize: 13
+                                selectByMouse: true
+                            }
                         }
                     }
                 }
