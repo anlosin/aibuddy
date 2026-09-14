@@ -819,8 +819,21 @@ class ChatBridge(QObject):
             except Exception:
                 pass  # 持久化失败不影响加载
         # history 字段是 [{role: 'user'|'assistant'|'system', content: '...'}]
-        history = conv.get("history", []) or []
-        self.sessionLoaded.emit(conv_id, history)
+        raw_history = conv.get("history", []) or []
+        # Day 20.4.3: 每条 history 都先经 _render_for_qml 处理（user escape +
+        # assistant markdown_to_html），保证 QML Text (RichText) 显示正确。
+        # 不处理的话：AI markdown 不渲染 + user 含 ``<`` 时 RichText 解析失败整段消失
+        rendered_history = []
+        for h in raw_history:
+            if not h:
+                continue
+            role = h.get("role", "user")
+            content = h.get("content", "")
+            rendered_history.append({
+                "role": role,
+                "content": self._render_for_qml(role, content, self._theme),
+            })
+        self.sessionLoaded.emit(conv_id, rendered_history)
         # 通知侧边栏 highlight 跟随移动
         self.sessionListChanged.emit()
 
@@ -1110,18 +1123,53 @@ class ChatBridge(QObject):
         except Exception:
             return []
 
-    @staticmethod
-    def _mk_msg(text: str, ts: str, code: str = "") -> dict:
+    def _mk_msg(self, text: str, ts: str, code: str = "") -> dict:
         """Day 17: messageAdded 的负载（收敛为单个 QVariantMap，规避 QTBUG-94360）
 
-        QML 端用 `m.code.length > 0` 推导 hasCode，因此不再单独传该字段。
+        Day 20.4.3: text 已**预先渲染**（Python 侧调 chat_render / html.escape），
+        QML 端 textFormat: Text.RichText 直接显示。**不能**在这里再 escape 一
+        次（会双重转义），也不能传原始文本（会撞 RichText 解析导致内容消失）。
+
+        QML 端用 `code.length > 0` 推导 hasCode，因此不再单独传该字段。
         """
         return {"text": text or "", "ts": ts or "", "code": code or ""}
 
+    @staticmethod
+    def _render_for_qml(role: str, content: str, theme: str = "light") -> str:
+        """Day 20.4.3: 把消息内容渲染成 QML RichText 可安全显示的字符串。
+
+        三个角色三种处理：
+        - user：原始输入 → html.escape（防 RichText 把 ``<stdio.h>`` 误读成标签）
+        - assistant：原始 AI 输出 → markdown_to_html（保留代码块/链接/列表等格式）
+        - tool_call / tool_result：JSON 摘要 → html.escape（避免参数里的 ``<`` / ``&`` 撞破 HTML）
+
+        之前所有路径都直接把 raw text 塞给 QML.Text (RichText)：
+        - AI history reload 时 markdown 不会渲染（用户看到的"内容消失"）
+        - 用户文本含 ``<`` 时 RichText 解析失败 → Text 控件整段空白
+        - tool_call 的 JSON 含 ``<tool>`` 之类被误读为标签
+
+        修复：所有 messageAdded / messageReplaced / sessionLoaded emit 前
+        统一过这道工序。
+        """
+        if not content:
+            return ""
+        if role in ("tool_call", "tool_result", "system"):
+            import html
+            return html.escape(content, quote=False)
+        if role == "user":
+            import html
+            return html.escape(content, quote=False)
+        # role == "assistant" 或其它：走 markdown 渲染
+        return chat_render.render_text_final("ai", content, theme)
+
     def _send_user_bubble(self, text: str):
         ts = datetime.now().strftime("%H:%M")
-        self.messageAdded.emit("user", self._mk_msg(text, ts))
-        # Day 10: 用户消息立即写到 SQLite（防止崩溃丢失）
+        # Day 20.4.3: escape user text（防 RichText 把 ``<stdio.h>`` 误读成标签
+        # 导致整段消失）。存盘还是存 raw（_append_history 第二个参数照旧），
+        # 只有 emit 给 QML 的版本 escape —— reload 时再 escape 一次。
+        rendered = self._render_for_qml("user", text, self._theme)
+        self.messageAdded.emit("user", self._mk_msg(rendered, ts))
+        # Day 10: 用户消息立即写到 SQLite（防止崩溃丢失）—— 存 raw
         self._append_history("user", text)
 
     def _append_history(self, role: str, content: str):
