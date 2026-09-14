@@ -38,6 +38,7 @@ from . import config as _config
 from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条路径都走这里）
 from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
 from .settings_dialog import show_settings, show_model_manager, show_plugin_manager  # Day 20.1: QtQuick 调 PyQt5 对话框
+from ._dialog_host import _DialogHost  # Day 20.2: PyQt5 对话框需要 QWidget + 状态，bridge 是 QObject，用 host 适配
 
 
 class ChatBridge(QObject):
@@ -1331,11 +1332,20 @@ class ChatBridge(QObject):
     # 三组菜单。PyQt5 对话框（settings_dialog / automation_dialogs）在
     # 已有 QApplication 进程里也能弹，所以 QML 调这些 slot 时直接 spawn
     # PyQt5 子窗口 —— 视觉风格略不一致但功能完整。
+    #
+    # Day 20.2: PyQt5 对话框的 show_* 函数是为 ChatWindow(QWidget) 写的，要
+    # 求 parent 是 QWidget 且 host 暴露十几个公开字段/方法。ChatBridge 是
+    # QObject —— 硬传 self 会 QDialog(ChatBridge) TypeError。用 _DialogHost
+    # 包一层，host 缓存到 self._dialog_host 上重复复用（多组对话框共享）。
     @pyqtSlot()
     def show_settings_dialog(self):
         """Day 20.1: QtQuick 菜单栏「设置 > 模型设置」入口"""
         try:
-            show_settings(self)
+            host = self._get_dialog_host()
+            if host is None:
+                self.toast.emit("QApplication 未就绪")
+                return
+            show_settings(host)
         except Exception as e:
             print(f"[chat_bridge] show_settings 失败: {e}")
             self.toast.emit(f"打开设置失败: {e}")
@@ -1344,7 +1354,11 @@ class ChatBridge(QObject):
     def show_plugin_manager_dialog(self):
         """Day 20.1: QtQuick 菜单栏「设置 > 插件管理」入口"""
         try:
-            show_plugin_manager(self)
+            host = self._get_dialog_host()
+            if host is None:
+                self.toast.emit("QApplication 未就绪")
+                return
+            show_plugin_manager(host)
         except Exception as e:
             print(f"[chat_bridge] show_plugin_manager 失败: {e}")
             self.toast.emit(f"打开插件管理失败: {e}")
@@ -1353,10 +1367,26 @@ class ChatBridge(QObject):
     def show_model_manager_dialog(self):
         """Day 20.1: QtQuick 菜单栏「模型 > 模型管理」入口"""
         try:
-            show_model_manager(self)
+            host = self._get_dialog_host()
+            if host is None:
+                self.toast.emit("QApplication 未就绪")
+                return
+            show_model_manager(host)
         except Exception as e:
             print(f"[chat_bridge] show_model_manager 失败: {e}")
             self.toast.emit(f"打开模型管理失败: {e}")
+
+    def _get_dialog_host(self):
+        """获取（或懒创建）_DialogHost。host 是 QWidget，对话框可当 parent；
+        对话框访问的字段 / 方法都在 host 上代理到 bridge 或 cfg。"""
+        from PyQt5.QtWidgets import QApplication
+        if QApplication.instance() is None:
+            return None
+        host = getattr(self, "_dialog_host", None)
+        if host is None:
+            host = _DialogHost(self)
+            self._dialog_host = host
+        return host
 
     @pyqtSlot()
     def show_automation_manager_dialog(self):

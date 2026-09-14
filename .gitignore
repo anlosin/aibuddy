@@ -45,9 +45,15 @@ scripts/migrate_conversations.py
 # 8 字符 base36 + 下划线 mkstemp 文件（如 01fmyin9 / _kbiz57x —— 注意：
 # gitignore 的 ? 是「任意 1 字符」通配符，所以不能用 ????????，
 # 否则 qwen_app / messages 之类的 8 字符合法文件名都会被误伤）。
-# 用字符类精确匹配 base36 + 下划线）
+# 用字符类精确匹配 base36 + 下划线。
+#
+# 注意：「qwen_app」目录本身恰好 8 字符且全在字符类里，会被上面的模式误
+# 伤成「整个 qwen_app/ 都不进 git」。下面用 ! 显式排除项目源码目录。
 [a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
 [a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
+# 例外：项目源码目录不被当成调试残留
+!/qwen_app/
+!/qwen_app/**
 _tmp_test_*.txt
 _t.txt
 _t2.txt
