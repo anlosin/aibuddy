@@ -55,8 +55,9 @@ class TestChatBridgeSlotNoParams(unittest.TestCase):
     但为了一致性，新增 slot 都不应带参数。"""
 
     def setUp(self):
-        from qwen_app import chat_bridge
-        self.src = open(chat_bridge.__file__, encoding="utf-8").read()
+        # 拆分后 5 个菜单 slot 在 _bridge_menu.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        self.src = bridge_source()
 
     def test_new_slots_have_no_params(self):
         """5 个新 slot 应无参数（@pyqtSlot() 无内容）"""

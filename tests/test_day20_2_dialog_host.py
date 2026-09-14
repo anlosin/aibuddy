@@ -27,6 +27,12 @@ def chat_bridge_module_file():
     return chat_bridge.__file__
 
 
+def _bridge_menu_source():
+    """拆分后菜单 slot 在 _bridge_menu.py —— 读 bridge 模块组源码。"""
+    from tests._bridge_source import bridge_source
+    return bridge_source()
+
+
 class TestDialogHostBasics(unittest.TestCase):
     """_DialogHost 必须是 QWidget，且每个字段读写不抛"""
 
@@ -250,7 +256,7 @@ class TestShowDialogSlotsUseHost(unittest.TestCase):
         self.src = inspect.getsource(chat_bridge)
 
     def _slot_uses_host_not_self(self, slot_name, dialog_fn):
-        src = open(chat_bridge_module_file(), encoding="utf-8").read()
+        src = _bridge_menu_source()
         # 用粗正则：slot 函数体内必须先取 host，再调 dialog_fn(host)
         # 不能出现 dialog_fn(self)
         # 取出函数体
@@ -299,8 +305,9 @@ class TestAutomationDialogFactory(unittest.TestCase):
         """bridge.show_automation_manager_dialog 必须调
         automation_dialogs.show_automation_manager(host) —— 不能再走
         hasattr 兜底分支（'待补完' toast）"""
-        from qwen_app import chat_bridge
-        src = open(chat_bridge.__file__, encoding="utf-8").read()
+        # 拆分后 slot 在 _bridge_menu.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         self.assertIn("from .automation_dialogs import show_automation_manager", src,
                       "bridge 必须显式 import show_automation_manager 工厂")
         self.assertIn("show_automation_manager(host)", src,

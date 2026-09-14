@@ -323,8 +323,9 @@ class TestAutomationSlotSuccessToast(unittest.TestCase):
     """
 
     def setUp(self):
-        from qwen_app import chat_bridge
-        self.src = open(chat_bridge.__file__, encoding="utf-8").read()
+        # 拆分后 show_automation_manager_dialog 在 _bridge_menu.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        self.src = bridge_source()
         self.toast_msgs = []
 
     def test_success_toast_after_close(self):
