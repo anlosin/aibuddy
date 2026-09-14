@@ -62,9 +62,9 @@ class TestChatBridgeUsesAbstractLayer(unittest.TestCase):
     """A1: chat_bridge.py 必须通过 chat_render 调用渲染（不在桥里直接 import theme.markdown_to_html）。"""
 
     def test_chat_bridge_no_direct_markdown_import(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后渲染调用分布在 bridge 模块组 —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # 不应再直接调 markdown_to_html（应走 chat_render）
         # 注意：chat_bridge 是从 theme import markdown_to_html 仅为内部 _flush_stream_buffer
         # 验证：_flush_stream_buffer 必须调 chat_render.render_text_final

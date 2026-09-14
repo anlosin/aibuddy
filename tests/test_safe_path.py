@@ -81,24 +81,25 @@ class TestIsSafeRelativeBackwardCompat(unittest.TestCase):
 
 
 class TestChatBridgeUsesSafePath(unittest.TestCase):
-    """chat_bridge 必须用 _safe_path 工具（DRY，不再内联实现）。"""
+    """chat_bridge 模块组必须用 _safe_path 工具（DRY，不再内联实现）。
+
+    拆分后相关方法分布在 chat_bridge.py + _bridge_*.py —— 扫描模块组。
+    """
 
     def test_chat_bridge_imports_safe_path(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         self.assertIn("from ._safe_path import", src,
-                      "chat_bridge 必须 import _safe_path")
+                      "bridge 模块组必须 import _safe_path")
 
     def test_chat_bridge_uses_safe_path_in_3_places(self):
-        """chat_bridge 至少有 3 处调用 _safe_path（read_text_file / _build_user_content / get_file_size）"""
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        """bridge 模块组至少有 3 处调用 _safe_path（read_text_file / _build_user_content / get_file_size）"""
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # 统计 is_safe_to_read( 或 is_safe_relative( 的调用次数
         count = src.count("is_safe_to_read(") + src.count("is_safe_relative(")
         self.assertGreaterEqual(count, 3,
-            f"chat_bridge 应至少 3 处用 _safe_path（实际 {count}）")
+            f"bridge 模块组应至少 3 处用 _safe_path（实际 {count}）")
 
 
 if __name__ == "__main__":

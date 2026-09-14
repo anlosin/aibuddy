@@ -65,9 +65,9 @@ class TestChatBridgeUsesRealModelId(unittest.TestCase):
         self.fail("找不到 start_real_chat")
 
     def test_uses_global_prefs_attribute(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 set_preferences/get_preferences 在 _bridge_model.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # 必须有 _enable_thinking / _enable_tools 属性 + get_preferences/set_preferences
         self.assertIn("_enable_thinking", src)
         self.assertIn("_enable_tools", src)
@@ -211,9 +211,9 @@ class TestChatBridgeExpertIntegration(unittest.TestCase):
     """C-NEW-3: chat_bridge 必须集成 expert_router（专家前缀 + system_prompt 注入）。"""
 
     def test_uses_match_expert(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 send_message 在 _bridge_send.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # send_message 必须 import match_expert
         import ast
         tree = ast.parse(src)
@@ -226,9 +226,9 @@ class TestChatBridgeExpertIntegration(unittest.TestCase):
         self.fail("找不到 send_message")
 
     def test_uses_build_system_prompt(self):
-        from qwen_app import chat_bridge
-        with open(chat_bridge.__file__, encoding="utf-8") as f:
-            src = f.read()
+        # 拆分后 _build_system_prompt 在 _bridge_send.py —— 扫模块组
+        from tests._bridge_source import bridge_source
+        src = bridge_source()
         # 必须有 _build_system_prompt 方法 + 调 expert_router.build_system_prompt
         self.assertIn("def _build_system_prompt", src,
                       "C-NEW-3：必须有 _build_system_prompt 方法")
