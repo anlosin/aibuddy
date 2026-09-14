@@ -651,10 +651,11 @@ class Scheduler:
 
     # ── 任务增删改（供 UI 调用）──
     def add_automation(self, name, prompt, schedule, enabled=True, max_rounds=None,
-                       model_id=""):
+                       model_id="", workspace="isolated"):
         # Day 19.1.1: 使用完整 UUID（36 字符）与 acb80e5 对齐
         # 12-char hex 仅 48 bits 熵，automaion 数量较少碰撞概率低，
         # 但与 session.py / chat_bridge.py 一致更安全。
+        # workspace: "isolated"（默认，每个任务独立工作目录）或 "shared"（共享 data/）
         auto = {
             "id": str(uuid.uuid4()),
             "name": name,
@@ -663,6 +664,7 @@ class Scheduler:
             "enabled": enabled,
             "max_rounds": max_rounds if max_rounds else self.max_rounds,
             "model_id": model_id or "",  # 空 = 跟随主模型；否则为模型注册表 id
+            "workspace": workspace or "isolated",
             "created_at": datetime.now().isoformat(),
             "last_run": None,
             "last_status": None,
