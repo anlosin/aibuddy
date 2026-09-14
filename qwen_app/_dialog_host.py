@@ -280,25 +280,43 @@ class _DialogHost(QWidget):
     # 并启动 30s 定时器跑 check_due，与 ChatWindow 行为对齐。
     @property
     def scheduler(self):
+        """懒构造 Scheduler（standalone 模式，与 chat_window parent 模式不同）。
+
+        Day 20.4 二次强化（用户首次点「自动化任务」崩溃）：
+        任何子步（make_openai_client / discover_plugins / Scheduler.__init__ /
+        QTimer 启动）失败都不能让 property 返回 None —— AutomationManagerDialog
+        内部到处依赖 ``parent.scheduler.automations``，None 会立刻 AttributeError。
+
+        策略：每一步各自 try/except；尽量构造完整 Scheduler；都失败时构造
+        一个**退化**的 Scheduler（client=None / plugins=[] / 走 try Scheduler
+        内的空 automations 兜底），让对话框能弹 + 表格显示「暂无任务」。
+        """
         sch = getattr(self._b, "_scheduler", None)
         if sch is not None:
             return sch
+        from .scheduler import Scheduler  # 自身 import 也可能炸（递归 import）
+        cur = self._cur_model()
+        client = None
+        plugins = []
         try:
-            from .scheduler import Scheduler
+            client = _config.make_openai_client(
+                cur.get("api_key", ""),
+                cur.get("base_url", ""),
+                cur.get("proxy", ""),
+            )
+        except Exception as e:
+            print(f"[dialog_host] make_openai_client 失败（用 None）: {e}")
+        try:
             from .plugin_manager import discover_plugins
-            from PyQt5.QtCore import QTimer
-            cur = self._cur_model()
-            try:
-                client = _config.make_openai_client(
-                    cur.get("api_key", ""),
-                    cur.get("base_url", ""),
-                    cur.get("proxy", ""),
-                )
-            except Exception:
-                # 客户端构建失败（key/url 缺失）—— 用 None，scheduler 内部兜底
-                client = None
             plugins, _ = discover_plugins()
+        except Exception as e:
+            print(f"[dialog_host] discover_plugins 失败（用 []）: {e}")
+        try:
             enabled = [p for p in _config.load_plugin_state() if p in plugins]
+        except Exception as e:
+            print(f"[dialog_host] load_plugin_state 失败（用 []）: {e}")
+            enabled = []
+        try:
             sch = Scheduler(
                 client=client,
                 model_id=cur.get("model_id", "") or "mock-qwen",
@@ -308,15 +326,71 @@ class _DialogHost(QWidget):
                 enable_tools=self.enable_tools,
                 max_rounds=self.max_agent_rounds,
             )
-            self._b._scheduler = sch
-            # 30s 定时 check_due（与 chat_window._sched_timer 一致）
+        except Exception as e:
+            # 兜底再兜底：构造一个完全空白的 Scheduler
+            print(f"[dialog_host] Scheduler() 构造失败: {e}")
+            try:
+                sch = Scheduler(client=None, model_id="mock-qwen")
+            except Exception as e2:
+                # 真正的最后一搏：手工 mock 一个有 .automations 列表的对象
+                print(f"[dialog_host] 退化 Scheduler 也失败: {e2}")
+                sch = _DummyScheduler()
+        self._b._scheduler = sch
+        # 30s 定时 check_due（与 chat_window._sched_timer 一致）；
+        # 退化 Scheduler 没 check_due 也无害，timer.start() 仍然 OK
+        try:
+            from PyQt5.QtCore import QTimer
             timer = QTimer(self._b)
             timer.setInterval(30000)
-            timer.timeout.connect(sch.check_due)
+            # 用 getattr 防御 — _DummyScheduler 没 check_due 时跳过
+            if hasattr(sch, "check_due"):
+                timer.timeout.connect(sch.check_due)
             timer.start()
             self._b._sched_timer = timer
-            return sch
         except Exception as e:
-            # 兜底：构造失败也要让对话框能弹（带空列表）
-            print(f"[dialog_host] 懒构造 Scheduler 失败: {e}")
-            return None
+            print(f"[dialog_host] 启动 30s QTimer 失败（不影响对话框）: {e}")
+        return sch
+
+
+class _DummyScheduler:
+    """_DialogHost.scheduler 的终极兜底 —— 连 Scheduler() 都构造失败时用。
+
+    暴露 AutomationManagerDialog 必需的属性：
+    - .automations: list（永远是空列表）
+    - .on_finished(cb) / .off_finished(cb) / .check_due() / .set_enabled() /
+      .add_automation() / .update_automation() / .delete_automation() /
+      .run_now() / .list_runs() / .read_log() / .get_schedule_str()
+    所有调用都吞掉（或返回安全值），绝不抛异常。
+    """
+
+    def __init__(self):
+        self.automations = []
+        self._finished_callbacks = []
+
+    def on_finished(self, cb): self._finished_callbacks.append(cb)
+    def off_finished(self, cb):
+        try: self._finished_callbacks.remove(cb)
+        except ValueError: pass
+    def check_due(self, now=None): pass
+    def set_enabled(self, aid, enabled): return False
+    def add_automation(self, **kw): return None
+    def update_automation(self, aid, **kw): return False
+    def delete_automation(self, aid): return False
+    def run_now(self, aid): return False
+    def list_runs(self, aid): return []
+    def read_log(self, run_id): return ""
+    # 一些对话框可能用到的属性
+    @property
+    def client(self): return None
+    @property
+    def model_id(self): return ""
+    @property
+    def enable_thinking(self): return False
+    @property
+    def enable_tools(self): return True
+    @property
+    def plugins(self): return []
+    @property
+    def enabled_plugins(self): return []
+    @property
+    def max_rounds(self): return 12

@@ -91,12 +91,17 @@ class AutomationManagerDialog(QDialog):
         self._run_watchdog = QTimer(self)
         self._run_watchdog.setSingleShot(True)
         self._run_watchdog.timeout.connect(self._on_watchdog_timeout)
-        # 订阅 scheduler 完成回调（_run_one 完成时触发）
-        if parent is not None and hasattr(parent, "scheduler"):
-            self._scheduler_callback = self._dispatch_run_done
-            parent.scheduler.on_finished(self._scheduler_callback)
-        else:
-            self._scheduler_callback = None
+        # 订阅 scheduler 完成回调（_run_one 完成时触发）。
+        # Day 20.4 兜底：parent.scheduler 可能为 None（懒构造失败时退化
+        # _DummyScheduler），或 on_finished 自身抛异常。两个都用 try 包住。
+        self._scheduler_callback = None
+        if parent is not None and getattr(parent, "scheduler", None) is not None:
+            try:
+                self._scheduler_callback = self._dispatch_run_done
+                parent.scheduler.on_finished(self._scheduler_callback)
+            except Exception as e:
+                print(f"[automation_dialogs] on_finished 注册失败（仍可显示）: {e}")
+                self._scheduler_callback = None
         self.setWindowTitle("自动化任务管理")
         self.resize(880, 540)
         layout = QVBoxLayout(self)
@@ -176,7 +181,15 @@ class AutomationManagerDialog(QDialog):
 
     # ────────────────────────────────
     def _items(self):
-        return self.parent_window.scheduler.automations
+        """Day 20.4 兜底：scheduler 可能为 None / 退化 _DummyScheduler。
+        所有情况下都必须返回 list。"""
+        sch = getattr(self.parent_window, "scheduler", None)
+        if sch is None:
+            return []
+        try:
+            return sch.automations or []
+        except Exception:
+            return []
 
     def refresh(self):
         # 先记住当前选中的 id，刷新后恢复
