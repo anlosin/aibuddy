@@ -27,18 +27,9 @@ QV4::Function::updateInternalClass 路径上发生栈越界，表现为启动期
 因此本文件里**所有可能被 QML Connections 监听的信号，参数个数必须 ≤2**。
 需要传更多字段时，把多余字段打包成 QVariantMap / QVariantList 放在第 2 个参数里。
 """
-from datetime import datetime
-from types import SimpleNamespace
-import os
 import threading
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty, QTimer, QFileSystemWatcher, Qt
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, pyqtProperty
 
-from .worker import WorkerThread
-from . import config as _config
-from . import chat_render  # A1: 共用渲染抽象层（QtQuick + PyQt5 两条路径都走这里）
-from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
-from .settings_dialog import show_settings, show_model_manager, show_plugin_manager  # Day 20.1: QtQuick 调 PyQt5 对话框
-from ._dialog_host import _DialogHost  # Day 20.2: PyQt5 对话框需要 QWidget + 状态，bridge 是 QObject，用 host 适配
 from ._bridge_plugin import PluginMixin  # 拆分 Step 1: 插件管理方法（信号声明仍在本类体内）
 from ._bridge_session import SessionMixin  # 拆分 Step 2: 会话管理方法
 from ._bridge_bubble import BubbleMixin  # 拆分 Step 3: 气泡操作方法

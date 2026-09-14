@@ -15,6 +15,8 @@ from . import config as _config
 class SessionMixin(object):
     """会话列表 / 新建 / 删除 / 重命名 / 清空 / 加载。"""
 
+    # ============ Day 8: 会话管理 Slot ============
+    @pyqtSlot(result='QVariantList')
     def list_sessions(self):
         """返回会话列表 [{id, name, time, sel}, ...] - QML 调用填入侧边栏"""
         try:
