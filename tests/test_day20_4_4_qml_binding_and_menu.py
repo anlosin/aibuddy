@@ -143,24 +143,21 @@ class TestPopupPositioning(unittest.TestCase):
         self.assertLess(p, x, "必须先 bubbleMenu.popup() 再设 x/y")
 
 
-class TestRowStrideHelper(unittest.TestCase):
-    """定位用到了行高步长，必须跟 delegate 的 height/spacing 一致。"""
+class TestRowStrideRemoved(unittest.TestCase):
+    """Day 20.4.5：rowStride 反推方案已废弃。
 
-    def test_row_stride_matches_delegate(self):
-        src = _read(MAIN_QML)
-        # 先定位 convListView 区块，再在区块内找 spacing（文件里其它地方也有 spacing）
-        i = src.index("id: convListView")
-        block = src[i:i + 4000]
-        m = re.search(r"readonly\s+property\s+int\s+rowStride\s*:\s*(\d+)", block)
-        self.assertIsNotNone(m, "convListView 必须声明 rowStride")
-        stride = int(m.group(1))
-        h = re.search(r"delegate:\s*Rectangle\s*\{[^}]*?\bheight:\s*(\d+)", block, re.S)
-        sp = re.search(r"\bspacing:\s*(\d+)", block)
-        self.assertIsNotNone(h, "找不到 delegate 的 height")
-        self.assertIsNotNone(sp, "找不到 convListView 的 spacing")
-        self.assertEqual(stride, int(h.group(1)) + int(sp.group(1)),
-                         f"rowStride={stride} 必须等于 delegate height"
-                         f"({h.group(1)}) + spacing({sp.group(1)})")
+    深层滚动时 delegate 的 index 不可靠（实测 delegate y=11036 ≈ 第 178 行，
+    却报 index=3；ListView.indexAt() 同样返回 3）。用它算 rowTop =
+    179 + 3*62 - 10899 = -10534 → my = -10472 → Qt 把 Menu.y 夹到 0 →
+    菜单跑到屏幕顶部。菜单位置改为从 moreBtn 自身 mapToItem(Overlay.overlay)
+    取坐标，因此 rowStride 不该再存在（留着就会诱导后人继续用）。
+    """
+
+    def test_row_stride_gone(self):
+        src = _strip_comments(_read(MAIN_QML))
+        self.assertNotIn("rowStride", src,
+                         "rowStride 已废弃（菜单改为从按钮自身取坐标，"
+                         "深层滚动时 delegate index 不可靠）")
 
 
 class TestBubbleImplicitWidthDecoupled(unittest.TestCase):

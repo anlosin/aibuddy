@@ -813,9 +813,17 @@ class ChatBridge(QObject):
             return
         self._current_conv_id = conv_id
         # 持久化 current_id（让 list_sessions().sel 反映新选择）
+        # Day 20.4.5: 只更新 current_id！**不要**用 save_conversations() 全量重写。
+        # 原因：① save_conversations 会把每行的 updated_at 写成
+        #   conv.get("updated_at", conv.get("created_at",""))，而
+        #   load_conversations() 返回的 dict 里**没有 updated_at** → 回退成
+        #   created_at → **把排序键抹平成 created_at**，而侧边栏正是
+        #   `ORDER BY updated_at DESC` → 点一下会话整个列表可能重排
+        #   （用户看到"列表自己跳了"）。② 每次点会话重写 185 行纯属浪费。
+        # set_current_conversation() 只动 session_state.current_id，无副作用。
         if current_id != conv_id:
             try:
-                _config.save_conversations(convs, conv_id)
+                _config.set_current_conversation(conv_id)
             except Exception:
                 pass  # 持久化失败不影响加载
         # history 字段是 [{role: 'user'|'assistant'|'system', content: '...'}]

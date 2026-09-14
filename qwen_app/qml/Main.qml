@@ -367,19 +367,49 @@ ApplicationWindow {
     }
 
     // 重拉会话列表（bridge.sessionListChanged 触发）
+    // Day 20.4.5：**不能无脑 clear()+append()**。原因有两条：
+    //   ① 全量重建会给 ListView 一次 model reset，容易把用户的滚动位置搞乱
+    //      （用户报"点了另一个会话后左侧列表自己跳回最顶"）；
+    //   ② 点会话只是「选中态」变了，没必要重建 185 个 delegate。
+    // 所以：**会话集合没变（同一批 id、同一顺序）时只就地更新 sel/name/time**；
+    // 只有真的新增/删除会话才重建，并在重建后恢复原来的滚动位置。
     function refreshConvList() {
-        convModel.clear()
         if (!bridge) return
         const sessions = bridge.list_sessions()
-        for (let i = 0; i < sessions.length; i++) {
-            const s = sessions[i]
+        var sameShape = (convModel.count === sessions.length)
+        if (sameShape) {
+            for (var k = 0; k < sessions.length; k++) {
+                if (convModel.get(k).convId !== sessions[k].id) {
+                    sameShape = false
+                    break
+                }
+            }
+        }
+        if (sameShape) {
+            // 就地更新：不 clear → 不触发 model reset → 滚动位置稳稳不动
+            for (var i = 0; i < sessions.length; i++) {
+                const s = sessions[i]
+                convModel.set(i, { "name": s.name, "time": s.time, "sel": s.sel })
+            }
+            return
+        }
+        // 集合变了（新建 / 删除 / 顺序变化）→ 必须重建，但要找回滚动位置
+        var keepY = convListView.contentY
+        convModel.clear()
+        for (var j = 0; j < sessions.length; j++) {
+            const sj = sessions[j]
             convModel.append({
-                "convId": s.id,
-                "name": s.name,
-                "time": s.time,
-                "sel": s.sel
+                "convId": sj.id,
+                "name": sj.name,
+                "time": sj.time,
+                "sel": sj.sel
             })
         }
+        // 内容高度要等一帧才更新，所以延后恢复并夹到合法范围
+        Qt.callLater(function() {
+            var maxY = Math.max(0, convListView.contentHeight - convListView.height)
+            convListView.contentY = Math.max(0, Math.min(keepY, maxY))
+        })
     }
 
     // Day 17: 启动时填充侧边栏。Day 16 把 enable_plugin_watcher 挪到 main.py 时
@@ -628,8 +658,6 @@ ApplicationWindow {
                     model: convModel
                     clip: true
                     spacing: 2
-                    // 行高 60 + spacing 2 —— 用来算某一行在视口里的 y
-                    readonly property int rowStride: 62
                     delegate:Rectangle {
                         width: ListView.view.width
                         height: 60
@@ -713,23 +741,28 @@ ApplicationWindow {
                                         sessionMenu.currentConvName = model.name
                                         // 3) 定位（实测总结，别再改回去）：
                                         //    a) parent 必须是 Overlay —— 否则 Qt 会自己重排
-                                        //       把 x/y 覆盖掉（实测 46,62 → 888,448）。
-                                        //    b) 基准用 convListView（长期存在、不会被回收），
-                                        //       绝不用 delegate / 行内按钮做 mapToItem 基准
-                                        //       —— ListView 回收 delegate 时带瞬时位移，
-                                        //       会把坐标算到屏幕角落。
-                                        //    c) 行在视口里的 y 用 index 直接算。
+                                        //       把 x/y 覆盖掉（实测设 46,62 → 888,448）。
+                                        //    b) **必须从按钮自身 mapToItem 取坐标**，
+                                        //       不要再用 `index * rowStride - contentY` 反推！
+                                        //       Day 20.4.5 实测：ListView 在深层滚动后
+                                        //       delegate 的 `index` 不可靠 —— 同一个
+                                        //       delegate.y=11036（=178 行）却报 index=3，
+                                        //       `indexAt()` 也返回 3 → 反推出来的 rowTop
+                                        //       是 -10534（大负数）→ 被钳到 y=0，
+                                        //       表现就是"菜单跑到列表最顶上"。
+                                        //       而 `moreBtn.mapToItem(ov, ...)` 在同一时刻
+                                        //       给出的坐标是正确的（实测 viewport 155 →
+                                        //       scene 334，与按钮实际位置完全一致）。
+                                        //    c) 点击处理是同步的（popup + 设坐标在同一帧内
+                                        //       完成），所以不存在"delegate 被回收导致
+                                        //       瞬时位移"的窗口。
                                         var ov = Overlay.overlay
-                                        var lvTL = convListView.mapToItem(ov, 0, 0)
+                                        var bl = moreBtn.mapToItem(ov, 0, moreBtn.height + 2)
                                         var mx = Math.max(4, Math.min(
-                                            lvTL.x + convListView.width - 10 - sessionMenu.width,
+                                            bl.x + moreBtn.width - sessionMenu.width,
                                             ov.width - sessionMenu.width - 4))
-                                        var rowTop = lvTL.y + index * convListView.rowStride
-                                                     - convListView.contentY
-                                        var below = rowTop + 60 + 2
-                                        var my = (below + sessionMenu.height <= ov.height)
-                                            ? below
-                                            : Math.max(4, rowTop - sessionMenu.height - 2)
+                                        var my = Math.max(4, Math.min(
+                                            bl.y, ov.height - sessionMenu.height - 4))
                                         // popup() 内部会按自己的规则重排一次位置，把我们
                                         // 事先设好的 x/y 覆盖掉；所以顺序必须是
                                         // 「先 popup()，再 x/y」。
