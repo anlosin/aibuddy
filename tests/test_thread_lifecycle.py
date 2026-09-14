@@ -145,8 +145,10 @@ class TestWorkerThreadHasDeleteLater(unittest.TestCase):
     """H2: WorkerThread 在两条 UI 路径上都必须 deleteLater。"""
 
     def _patch_worker_thread(self):
-        from qwen_app import chat_bridge
-        orig = chat_bridge.WorkerThread
+        # 拆分后 start_real_chat 在 _bridge_stream.py，WorkerThread 名字
+        # 随方法体迁到该模块 —— patch 点同步放宽到 _bridge_stream（§2.6）
+        from qwen_app import _bridge_stream as mod
+        orig = mod.WorkerThread
         captured = {}
 
         class FakeWT:
@@ -170,8 +172,8 @@ class TestWorkerThreadHasDeleteLater(unittest.TestCase):
             def connect(self, slot):
                 self._wt._slots.setdefault(self._name, []).append(slot)
 
-        chat_bridge.WorkerThread = FakeWT
-        return orig, chat_bridge
+        mod.WorkerThread = FakeWT
+        return orig, mod
 
     def _trigger_finished(self, wt):
         for s in wt._slots.get("finished", []):
