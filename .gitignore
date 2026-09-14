@@ -70,6 +70,11 @@ _analyze.py
 _tmp_*.py
 _tmp_*.txt
 
+# ===== 验证截图产物 =====
+# tests/manual_verify_qml_interactions.py 真渲染跑出来的截图（人工核对用，
+# 可再生，不进仓库）。
+tests/artifacts/
+
 # ===== 个人运维脚本（含内网信息，公开仓库默认排除） =====
 *.sh
 

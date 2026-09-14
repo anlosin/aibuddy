@@ -39,7 +39,17 @@ Rectangle {
     radius: radiusVal
     border.color: borderColor
     border.width: isUser ? 0 : 1
-    implicitWidth: contentRow.implicitWidth + 28
+    // Day 20.4.4 修复 "Binding loop detected for property implicitHeight"：
+    //   标题 Text 用了 Layout.fillWidth + wrapMode.Wrap → 它的 implicitWidth
+    //   依赖 Text.width ← contentRow.width ← bubble.width ← bubble.implicitWidth。
+    //   原来写 implicitWidth: contentRow.implicitWidth + 28 时，这条链首尾相接
+    //   成 implicitWidth 自环；Qt 会把环就近归到 implicitHeight 上报警，于是
+    //   每创建一个气泡就往 stderr 打一条 binding loop 警告（用户容易误当报错）。
+    //   实测：把 implicitWidth 解耦成常量后警告消失（stderr 干净）。
+    //   气泡实际宽度由调用方的 Layout.preferredWidth 决定，这里只提供稳定的
+    //   implicit 尺寸，因此用常量属性而不是从 contentRow 反推最稳妥。
+    property int preferredWidth: 680
+    implicitWidth: preferredWidth
     implicitHeight: contentRow.implicitHeight + 24
 
     // 真阴影（叠层 Rectangle 模拟，GPU 渲染柔和）
@@ -164,11 +174,19 @@ Rectangle {
                 bubbleMenu.currentMsgWho = bubble.who
                 bubbleMenu.currentMsgIndex = bubble.msgIndex
                 bubbleMenu.currentMsgHasCode = bubble.hasCode
-                // 屏幕绝对坐标：moreBtn 右下角对齐菜单右边缘，避免菜单超出可见区
-                var pt = moreBtn.mapToItem(null, moreBtn.width, moreBtn.height + 2)
-                bubbleMenu.x = pt.x - bubbleMenu.width + moreBtn.width
-                bubbleMenu.y = pt.y
+                // Day 20.4.4 定位（跟侧边栏 sessionMenu 同一套规则）：
+                //   1) parent 必须是 Overlay —— 否则 Qt 会自己重排位置
+                //   2) 顺序必须「先 popup() 再设 x/y」—— popup() 内部会覆盖
+                //      我们事先设好的 x/y（这是之前一直定位失败的真因）
+                //   3) 菜单右边缘对齐按钮右边缘，上边缘在按钮下方 2px，再 clamp 进窗口
+                var ov = Overlay.overlay
+                var p = moreBtn.mapToItem(ov, 0, moreBtn.height + 2)
+                var mx = Math.max(4, Math.min(p.x + moreBtn.width - bubbleMenu.width,
+                                              ov.width - bubbleMenu.width - 4))
+                var my = Math.max(4, Math.min(p.y, ov.height - bubbleMenu.height - 4))
                 bubbleMenu.popup()
+                bubbleMenu.x = mx
+                bubbleMenu.y = my
             }
         }
     }
@@ -178,6 +196,9 @@ Rectangle {
     // 直接引用 bubble.*（跨 Popup window scope 不可靠）。
     Menu {
         id: bubbleMenu
+        // Day 20.4.4: parent 必须是 Overlay（普通 Item 做 parent 时 Qt 会自己重排位置，
+        // 覆盖掉我们设的 x/y）。定位细节见 moreMa.onClicked。
+        parent: Overlay.overlay
         property string currentMsgText: ""
         property string currentMsgCode: ""
         property string currentMsgWho: ""

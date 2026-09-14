@@ -628,6 +628,8 @@ ApplicationWindow {
                     model: convModel
                     clip: true
                     spacing: 2
+                    // 行高 60 + spacing 2 —— 用来算某一行在视口里的 y
+                    readonly property int rowStride: 62
                     delegate:Rectangle {
                         width: ListView.view.width
                         height: 60
@@ -682,7 +684,13 @@ ApplicationWindow {
                                 Layout.preferredHeight: 24
                                 radius: 4
                                 color: moreMa.containsMouse ? root.pal.sidebarBorder : "transparent"
-                                visible: rowMa.containsMouse || model.sel
+                                // Day 20.4.4 修复：原来 visible: rowMa.containsMouse || model.sel
+                                // 是个「抖动陷阱」——鼠标从行体移到 ⋯ 上时，hover 从 rowMa
+                                // 切给 moreMa，rowMa.containsMouse 立刻变 false → 按钮变不可见
+                                // → 鼠标底下没东西了 → hover 回到 rowMa → 按钮又出现……
+                                // 闪烁循环，用户永远点不中（点到的都是 rowMa → load_session）。
+                                // 跟 MessageBubble 里 moreBtn 的结论一致（Day 20.3 已改为常显）。
+                                visible: true
                                 z: 10
                                 Text {
                                     anchors.centerIn: parent
@@ -703,25 +711,51 @@ ApplicationWindow {
                                         //    MessageBubble.qml 同一坑）
                                         sessionMenu.currentConvId = model.convId
                                         sessionMenu.currentConvName = model.name
-                                        // 3) 定位：Menu.x / Menu.y 是 sessionMenu.parent
-                                        //    的局部坐标，所以 mapToItem 要以 parent 为目标，
-                                        //    不能用 null（null 是全局屏幕坐标，差一个 sidebar 偏移）
-                                        var pt = moreBtn.mapToItem(sessionMenu.parent,
-                                                                   moreBtn.width, moreBtn.height)
-                                        sessionMenu.x = pt.x - sessionMenu.width + moreBtn.width
-                                        sessionMenu.y = pt.y + 2
+                                        // 3) 定位（实测总结，别再改回去）：
+                                        //    a) parent 必须是 Overlay —— 否则 Qt 会自己重排
+                                        //       把 x/y 覆盖掉（实测 46,62 → 888,448）。
+                                        //    b) 基准用 convListView（长期存在、不会被回收），
+                                        //       绝不用 delegate / 行内按钮做 mapToItem 基准
+                                        //       —— ListView 回收 delegate 时带瞬时位移，
+                                        //       会把坐标算到屏幕角落。
+                                        //    c) 行在视口里的 y 用 index 直接算。
+                                        var ov = Overlay.overlay
+                                        var lvTL = convListView.mapToItem(ov, 0, 0)
+                                        var mx = Math.max(4, Math.min(
+                                            lvTL.x + convListView.width - 10 - sessionMenu.width,
+                                            ov.width - sessionMenu.width - 4))
+                                        var rowTop = lvTL.y + index * convListView.rowStride
+                                                     - convListView.contentY
+                                        var below = rowTop + 60 + 2
+                                        var my = (below + sessionMenu.height <= ov.height)
+                                            ? below
+                                            : Math.max(4, rowTop - sessionMenu.height - 2)
+                                        // popup() 内部会按自己的规则重排一次位置，把我们
+                                        // 事先设好的 x/y 覆盖掉；所以顺序必须是
+                                        // 「先 popup()，再 x/y」。
                                         sessionMenu.popup()
+                                        sessionMenu.x = mx
+                                        sessionMenu.y = my
                                     }
                                 }
                             }
                         }
-                        // rowMa 必须在 three-dot 之前声明 + z < 10（已 OK：比 three-btn z 晚声明）
+                        // Day 20.4.4 关键修复：rowMa 虽然源码里写在 RowLayout 之后，
+                        // 但 QML 命中测试按「绘制顺序的逆序」——同一父项内 z 相同时
+                        // **后声明者在上**。rowMa 覆盖整个 delegate 且最后声明，
+                        // 于是永远先拿到 click，把 RowLayout（内含 moreBtn）的点击吞掉
+                        // → 三点按钮永远点不到（点了没反应 / 没有菜单）。
+                        // moreBtn 上的 z:10 只在 RowLayout **内部**相对兄弟生效，
+                        // 对 rowMa 完全无效。
+                        // 修复：把 rowMa 压到 RowLayout 之下（z:-1 < RowLayout 的 z:0），
+                        // 让 RowLayout 子树先参与命中测试；文本区不是 MouseArea，
+                        // 事件会自然落回 rowMa。
                         MouseArea {
                             id: rowMa
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            z: 0
+                            z: -1
                             onClicked: if (bridge) bridge.load_session(model.convId)
                         }
                     }
@@ -731,6 +765,11 @@ ApplicationWindow {
                 // 不可靠 → 数据通过 Menu 自身的 currentConvXxx 属性传递。
                 Menu {
                     id: sessionMenu
+                    // Day 20.4.4: 只有 parent = Overlay 时 Qt 才「尊重」我们设的 x/y。
+                    // parent 是普通 Item（行 / delegate / ListView）时 Qt 会自己重排位置，
+                    // 把 x/y 覆盖掉（实测设 46,62 → 实际 888,448，弹到窗口右下角）。
+                    // 所以 parent 固定为 Overlay，x/y 用 Overlay 坐标（见 onClicked）。
+                    parent: Overlay.overlay
                     property string currentConvId: ""
                     property string currentConvName: ""
                     MenuItem {
@@ -943,11 +982,19 @@ ApplicationWindow {
                                     Layout.fillWidth: who === "user"
                                     Layout.preferredHeight: 1
                                 }
+                                // Day 20.4.4 关键修复：必须写 model.who / model.text！
+                                // MessageBubble **自身**有 who / text / hasCode 属性，
+                                // 写 `who: who` 时 RHS 会被 QML 解析成 MessageBubble
+                                // 自己的属性（作用域遮蔽：对象自身属性优先于 delegate
+                                // 的 model role）→ 变成自绑定 → 永远停在默认值
+                                // who="ai" / text="" / hasCode=false。
+                                // 现象：所有气泡都渲染成 AI 白气泡，且正文一个字都没有。
+                                // 对照：`text: ts` 没事，因为 Text 没有 ts 属性。
                                 MessageBubble {
-                                    who: who
-                                    text: text
-                                    hasCode: hasCode
-                                    code: hasCode ? code : ""
+                                    who: model.who
+                                    text: model.text
+                                    hasCode: model.hasCode
+                                    code: model.hasCode ? model.code : ""
                                     // Day 20: 注入 ListView.index（delegate 上下文属性）到气泡
                                     msgIndex: index
                                     Layout.preferredWidth: 680

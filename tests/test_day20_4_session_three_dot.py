@@ -11,8 +11,11 @@
 5. load_session 用的是同一个会话（已 sel）→ messageModel 不变 → 用户
    看到「无反应」
 
-修复：
-1. three-dot Rectangle 加 z:10（抬高到 rowMa 之上）
+修复（Day 20.4.4 实测修正 z-order 手段）：
+1. **rowMa 压到 RowLayout 之下（z: -1）**。原以为给 moreBtn 加 z:10 就够，
+   但 moreBtn 的 z 只在其父 RowLayout *内部* 相对兄弟生效；对覆盖整个
+   delegate 的 rowMa 完全无效。命中测试按绘制顺序逆序 → rowMa 后声明者
+   永远先拿到 click。把 rowMa 的 z 压到 0 以下，RowLayout 子树才先参与命中。
 2. three-dot onClicked 第一行 ``mouse.accepted = true``（防止冒泡到 rowMa）
 3. 改成弹菜单（重命名 / 清空消息 / 删除会话），不再直接 delete_session
 4. chat_bridge.py 加两个新 slot：rename_session / clear_session
@@ -25,7 +28,7 @@
 - 3 个 slot 签名正确（pyqtSlot 类型注解）
 - rename_session 拒绝空字符串 + 写盘
 - clear_session_history 成功后 emit sessionLoaded（让 QML 清 messageModel）
-- Main.qml three-dot 必须有 z:10 + onClicked 首行 mouse.accepted = true
+- Main.qml rowMa 必须 z < 0（三点才点得到）+ onClicked 首行 mouse.accepted = true
 - Main.qml sessionMenu 必须有 currentConvId / currentConvName 属性
 - Main.qml renameDialog 必须存在
 - 三个 MenuItem 都在（重命名 / 清空 / 删除）
@@ -196,18 +199,16 @@ class TestSessionThreeDotClickStructure(unittest.TestCase):
         cls.src = open(os.path.join(_ROOT, "qwen_app", "qml", "Main.qml"),
                       encoding="utf-8").read()
 
-    def test_three_dot_z_order_higher_than_rowma(self):
-        """three-dot Rectangle 必须 z:10（rowMa 是 z:0）—— 否则被吞"""
-        # 找 three-dot Rectangle 块（id: moreBtn 块）
-        m = re.search(r"id:\s*moreBtn[\s\S]{0,400}z:\s*(\d+)", self.src)
-        self.assertIsNotNone(m, "找不到 moreBtn Rectangle")
-        moreBtn_z = int(m.group(1))
-        # 找 rowMa 块
-        m2 = re.search(r"id:\s*rowMa[\s\S]{0,300}z:\s*(\d+)", self.src)
-        self.assertIsNotNone(m2, "找不到 rowMa")
-        rowMa_z = int(m2.group(1))
-        self.assertGreater(moreBtn_z, rowMa_z,
-                           f"three-dot z={moreBtn_z} 必须大于 rowMa z={rowMa_z}")
+    def test_rowma_pushed_below_rowlayout(self):
+        """Day 20.4.4 修正：让三点可点的正确做法是把 rowMa 压到 RowLayout 之下
+        （z < 0），而不是给 moreBtn 加 z:10 —— moreBtn 的 z 只在 RowLayout
+        *内部* 相对兄弟生效，对覆盖整个 delegate 的 rowMa 完全无效。"""
+        m = re.search(r"id:\s*rowMa\b[\s\S]{0,400}?\bz:\s*(-?\d+)", self.src)
+        self.assertIsNotNone(m, "rowMa 必须显式设置 z")
+        row_ma_z = int(m.group(1))
+        self.assertLess(row_ma_z, 0,
+                        f"rowMa z={row_ma_z} 必须 < 0（RowLayout 默认 z=0），"
+                        "否则 covering 的 rowMa 会吃掉三点按钮的 click")
 
     def test_three_dot_click_blocks_propagation(self):
         """onClicked 第一行必须是 mouse.accepted = true（阻止冒泡到 rowMa）"""
@@ -239,17 +240,27 @@ class TestSessionThreeDotClickStructure(unittest.TestCase):
         self.assertIn('qsTr("清空消息")', body)
         self.assertIn('qsTr("删除会话")', body)
 
-    def test_session_menu_uses_bridge_slots(self):
-        """MenuItem 触发器必须调 bridge 上对应 slot"""
+    def test_session_menu_routes_to_dialogs_and_slots(self):
+        """Day 20.4.4：重命名改走 renameDialog（不直接调 bridge.rename_session），
+        清空 / 删除仍直接调 bridge slot；重命名的 bridge 调用必须仍存在于
+        renameDialog 内（端到端不丢）。"""
         m = re.search(r"id:\s*sessionMenu[\s\S]{0,2500}", self.src)
         self.assertIsNotNone(m)
         body = m.group(0)
-        self.assertIn("bridge.rename_session", body,
-                      "重命名 MenuItem 必调 bridge.rename_session")
+        self.assertIn("renameDialog.open()", body,
+                      "重命名 MenuItem 必须打开 renameDialog")
+        self.assertNotIn("bridge.rename_session(", body,
+                         "重命名不应在 MenuItem 里直接调 bridge.rename_session"
+                         "（要走 renameDialog 交互式输入）")
         self.assertIn("bridge.clear_session_history", body,
                       "清空消息 MenuItem 必调 bridge.clear_session_history")
         self.assertIn("bridge.delete_session", body,
                       "删除会话 MenuItem 必调 bridge.delete_session")
+        # 重命名的 bridge 调用仍必须存在于 renameDialog（端到端覆盖不丢）
+        dm = re.search(r"id:\s*renameDialog[\s\S]{0,2500}", self.src)
+        self.assertIsNotNone(dm, "找不到 renameDialog")
+        self.assertIn("bridge.rename_session(", dm.group(0),
+                      "renameDialog.onAccepted 必须调 bridge.rename_session")
 
     def test_no_legacy_direct_delete(self):
         """Day 20.4 之前的 moreMa.onClicked 直接 delete_session 已删"""
