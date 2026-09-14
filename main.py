@@ -23,8 +23,14 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 # 抑制 libpng iCCP 警告（Qt 5.15.x 已修复大部分 PNG 警告；warnings.filterwarnings 留作兜底）
+# 抑制 jieba 的 SyntaxWarning（jieba 库用普通字符串写正则 "\\." / "\\s"，
+# Python 3.12+ 会告警 invalid escape sequence，但 jieba 多年没修——
+# 这些不是真错误，会污染用户首屏让用户以为程序坏了）
 import warnings
 warnings.filterwarnings("ignore", message=".*iCCP.*")
+warnings.filterwarnings("ignore", message=".*invalid escape sequence.*")
+# 一些 jieba 抛 DeprecationWarning 也一并忽略
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="jieba.*")
 
 
 from PyQt5.QtCore import Qt, QUrl

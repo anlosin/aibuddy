@@ -1448,6 +1448,9 @@ class ChatBridge(QObject):
         （跟 settings_dialog.show_* 同一套模式），host 走 _DialogHost，会按
         standalone 模式懒构造 Scheduler（与 chat_window 的 chat_scheduler 行为
         对齐：30s 定时 + 立即 check_due）。
+        Day 20.4 强化：scheduler 懒构造可能因 make_openai_client / discover_plugins
+        / Scheduler 构造失败走退化路径；dialog 内部所有调用都包了 try；
+        本 slot 仅在 import / dialog 构造阶段抛异常时才会被 except 兜底。
         """
         try:
             host = self._get_dialog_host()
@@ -1456,8 +1459,15 @@ class ChatBridge(QObject):
                 return
             from .automation_dialogs import show_automation_manager
             show_automation_manager(host)
+            # 成功提示（不阻塞 exec_，但用户能看见）
+            # 注意：show_automation_manager 阻塞到 dialog 关闭才返回，
+            # 这条 toast 在 dialog 关掉后才发
+            n = len(getattr(host.scheduler, "automations", []) or [])
+            self.toast.emit(f"任务管理已关闭（{n} 个任务）")
         except Exception as e:
             print(f"[chat_bridge] show_automation_manager 失败: {e}")
+            import traceback
+            traceback.print_exc()
             self.toast.emit(f"打开自动化管理失败: {e}")
 
     @pyqtSlot()

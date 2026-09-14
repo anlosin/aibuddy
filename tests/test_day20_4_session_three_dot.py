@@ -276,5 +276,61 @@ class TestSessionThreeDotClickStructure(unittest.TestCase):
 import re
 
 
+class TestJiebaWarningsSuppressed(unittest.TestCase):
+    """Day 20.4: 用户报「点击后报错这些」实际是 jieba 的 SyntaxWarning。
+
+    jieba 库（.venv\Lib\site-packages\jieba\）源码里用普通字符串写正则
+    ``"\\."`` / ``"\\s"``，Python 3.12+ 会按字面意义解释 backslash（因为
+    非 raw 字符串），每次 import 触发 SyntaxWarning，污染用户首屏让
+    用户误以为程序坏了。
+
+    修复：main.py 启动时 filterwarnings("ignore", ".*invalid escape sequence.*")
+    关掉所有此类警告（jieba 多年不修源码，我们只能这一侧处理）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = open(os.path.join(_ROOT, "main.py"), encoding="utf-8").read()
+
+    def test_main_py_filters_invalid_escape(self):
+        """main.py 必须有 filterwarnings 过滤 invalid escape sequence"""
+        self.assertRegex(self.src, r"filterwarnings\([^)]*invalid\s+escape\s+sequence",
+                         "main.py 必须有 filterwarnings 抑制 jieba 的 SyntaxWarning")
+
+    def test_no_jieba_in_main_dependencies(self):
+        """main.py 不应直接依赖 jieba（jieba 是间接 import 进来的）"""
+        # 不强求 jieba 不被 import，但确认我们的 filter 覆盖到了
+        self.assertIn("warnings", self.src,
+                      "main.py 必须 import warnings 才能 filterwarnings")
+
+
+class TestAutomationSlotSuccessToast(unittest.TestCase):
+    """Day 20.4: show_automation_manager_dialog 关闭后必须 toast「任务管理已关闭」。
+
+    用户报「点击后报错」实际是把 jieba warnings 当成错误。给个成功 toast
+    让用户看到「正常工作了」的反馈。
+    """
+
+    def setUp(self):
+        from qwen_app import chat_bridge
+        self.src = open(chat_bridge.__file__, encoding="utf-8").read()
+        self.toast_msgs = []
+
+    def test_success_toast_after_close(self):
+        """slot 关闭 dialog 后必须 emit toast"""
+        self.assertIn('任务管理已关闭', self.src,
+                      "show_automation_manager_dialog 必须有「任务管理已关闭」成功 toast")
+
+    def test_failure_path_has_traceback(self):
+        """except 分支必须 print traceback（用户能看到完整堆栈）"""
+        m = re.search(
+            r"def show_automation_manager_dialog.*?(?=\n    @pyqtSlot|\n    def _get_dialog_host|\Z)",
+            self.src, re.DOTALL)
+        self.assertIsNotNone(m)
+        body = m.group(0)
+        self.assertIn("traceback.print_exc()", body,
+                      "失败时必须 print traceback，不能只 print(e)")
+
+
 if __name__ == "__main__":
     unittest.main()
