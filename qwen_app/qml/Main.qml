@@ -522,7 +522,8 @@ ApplicationWindow {
                 "hasCode": cd.length > 0,
                 "code": cd
             })
-            msgList.positionViewAtEnd()
+            // Day 20.6.5: 用户消息强制回底；AI 占位/工具气泡只在跟随态才滚
+            msgList.scrollToEnd(who === "user")
         }
         // 流式追加到最后一个匹配 who 的气泡
         // Day 14: 多轮工具调用后顺序为 [user, ai, tool_call, tool_result, ai, tool_result]，
@@ -538,6 +539,8 @@ ApplicationWindow {
             if (idx < 0) return
             const cur = messageModel.get(idx)
             messageModel.set(idx, { "text": cur.text + content })
+            // Day 20.6.5: 流式追加时跟随气泡长高（用户上滚过则不拽人）
+            msgList.scrollToEnd(false)
         }
         // 完成最后一个气泡
         function onFinalizeLast(who) {
@@ -548,6 +551,9 @@ ApplicationWindow {
             const idx = _lastIndexOf(who)
             if (idx < 0) return
             messageModel.set(idx, { "text": newText })
+            // Day 20.6.5: 替换后气泡高度突变，跟随态必须重新滚到底，
+            // 否则视图停在「用户问题压在视口底部」、渲染后的回答在屏幕外
+            msgList.scrollToEnd(false)
         }
 
         // Day 8: 会话列表变化 -> 重拉
@@ -572,6 +578,8 @@ ApplicationWindow {
                     "code": ''
                 })
             }
+            // Day 20.6.5: 会话加载完成后回到底部（最新消息）
+            msgList.scrollToEnd(true)
         }
         // 错误气泡
         function onAppendError(who, text) {
@@ -582,7 +590,7 @@ ApplicationWindow {
                 "hasCode": false,
                 "code": ""
             })
-            msgList.positionViewAtEnd()
+            msgList.scrollToEnd(true)
         }
         // 主题切换
         function onThemeChanged(name) {
@@ -592,7 +600,7 @@ ApplicationWindow {
         function onBubbleDeleted(idx) {
             if (idx < 0 || idx >= messageModel.count) return
             messageModel.remove(idx)
-            msgList.positionViewAtEnd()
+            msgList.scrollToEnd(false)
         }
         // Day 20: 引用回复（bridge.quote_reply 触发，文本填入输入框）
         function onQuoteInserted(quoted) {
@@ -1082,6 +1090,50 @@ ApplicationWindow {
                     rightMargin: 80
                     topMargin: 32
                     bottomMargin: 24
+
+                    // ===== Day 20.6.5: 流式跟随滚动（修复「AI 回答不自动滚动 /
+                    // 生成完成后问题压在视口底部、回答在屏幕外」） =====
+                    // 根因：onMessageAdded 里的同步 positionViewAtEnd() 在内容高度
+                    // 更新前执行，经常滚不到位；而流式 appendToLast 和 Markdown
+                    // messageReplaced（气泡高度突变）完全没有滚动逻辑。
+                    // 方案：followBottom 表示「粘底」。**只在用户手势时变更**：
+                    // 拖拽/滚轮开始 → 解除；手势结束停在底部 → 恢复。
+                    // 不要用 onContentYChanged 瞬时比较 —— 气泡 Text 重布局是
+                    // 异步的，contentHeight 抖动 + contentY 钳制会把跟随态误关
+                    // （探针实测 8 个 chunk 后 followBottom 被误置 False 卡死）。
+                    // 滚动用两段式校正：callLater 一帧后滚 + 120ms 后再校正一次。
+                    property bool followBottom: true
+                    onMovementStarted: followBottom = false
+                    onMovementEnded: followBottom = atYEnd
+                    // 大段文本的 Text 重布局跨多个事件循环，contentHeight 分批
+                    // 长高 —— 必须**每次 contentHeight 变化都重滚**（事件驱动），
+                    // 再加一个有界 Timer 兜底。不要用「到底就停」的条件 ——
+                    // 判断所用 contentHeight 和滚动时一样是过期值，会提前收工
+                    // （探针实测 contentY 卡在 2486 / 真底 5354）。
+                    onContentHeightChanged: if (followBottom) Qt.callLater(function () {
+                        if (msgList.followBottom) msgList.positionViewAtEnd()
+                    })
+                    Timer {
+                        id: scrollAid
+                        interval: 80
+                        repeat: true
+                        property int left: 0
+                        onTriggered: {
+                            if (!msgList.followBottom || left <= 0) { stop(); return }
+                            left--
+                            msgList.positionViewAtEnd()
+                        }
+                    }
+                    function scrollToEnd(force) {
+                        if (force) followBottom = true
+                        if (!followBottom) return
+                        Qt.callLater(function () {
+                            if (msgList.followBottom) msgList.positionViewAtEnd()
+                        })
+                        scrollAid.left = 25
+                        scrollAid.restart()
+                    }
+
                     delegate: Item {
                         width: ListView.view.width
                         height: msgRow.implicitHeight + 18
