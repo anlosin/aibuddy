@@ -328,6 +328,24 @@ ApplicationWindow {
 
     color: themeName === "dark" ? "#0E0F12" : "#F8F9FB"
 
+    // ===== Day 20.6.3: 窗口级 palette 绑主题色板（菜单栏暗色文字的最终修复） =====
+    // 根因（offscreen 探针实测）：QQC2 控件默认文字色来自系统 palette
+    // （近黑 #26282A），黑字配暗色 topbarBg / 菜单背景 → 菜单栏文字不可见、
+    // 弹出菜单内容不可读（用户感知为「点不了 / 没反应」）。
+    // 窗口级 palette 会被 MenuBarItem / MenuItem 的默认 IconLabel 继承
+    // （实测 #26282A → #E8E8E8），切主题自动跟随。不碰 delegate 的
+    // palette/contentItem —— 那两处曾分别导致 & 字面显示 / hit test 异常。
+    palette.window: root.pal.topbarBg
+    palette.windowText: root.pal.textPrimary
+    palette.text: root.pal.textPrimary
+    palette.button: root.pal.inputBg
+    palette.buttonText: root.pal.textPrimary
+    palette.base: root.pal.inputBg
+    palette.highlight: root.pal.sendBtn
+    palette.highlightedText: "#FFFFFF"
+    palette.toolTipBase: root.pal.inputBg
+    palette.toolTipText: root.pal.textPrimary
+
     // ===== 主题调色板（双套） =====
     readonly property var pal: ({
         "light": {
