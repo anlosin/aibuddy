@@ -7,7 +7,7 @@ ApplicationWindow {
     visible: true
     width: 1100
     height: 760
-    title: "aibuddy (QtQuick Day 1-2 Demo)"
+    title: "aibuddy"
 
     // ===== Day 20: 顶部 MenuBar =====
     // Day 20.3 精简：8 组（文件/编辑/视图/聊天/设置/模型/自动化/帮助）
@@ -19,9 +19,46 @@ ApplicationWindow {
     // 所有 action 走 bridge.* slot —— 已经在 chat_bridge.py 实现
     // 不引入新 QObject 局部变量（避免保活坑）
     // 所有 MenuItem enabled 都做 bridge 注入守卫（H5 教训）
+    //
+    // Day 20.6: MenuBar/Menu/MenuItem 默认走系统 Fusion 风格 —— Windows
+    // 上始终浅色背景 + 黑色文字，暗黑模式下菜单栏「不变」。统一 background
+    // 绑色板（topbarBg/textPrimary），MenuItem hover/selected 也走 sidebarHover
+    // / sidebarSel，避免系统风格盖住我们的暗色调。
     menuBar: MenuBar {
+        background: Rectangle {
+            color: root.pal.topbarBg
+            border.color: root.pal.topbarBorder
+            border.width: 0
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: root.pal.topbarBorder
+            }
+        }
+        delegate: MenuBarItem {
+            id: mbi
+            background: Rectangle {
+                color: mbi.highlighted ? root.pal.sidebarHover : "transparent"
+            }
+            contentItem: Text {
+                text: mbi.text
+                color: root.pal.textPrimary
+                font.pixelSize: 13
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 8
+                rightPadding: 8
+            }
+        }
+        // Day 20.6: 所有下拉子菜单（Popup）也要绑色板，否则 MenuItem 还是
+        // 系统 Fusion 浅色（白底黑字），暗黑模式下一片惨白刺眼。Menu 设
+        // background，MenuItem 用 default delegate 覆盖 hover/selected 色。
         Menu {
+            id: fileMenu
             title: qsTr("&文件")
+            background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
                 text: qsTr("新对话\tCtrl+N")
                 enabled: bridge !== undefined && bridge !== null
@@ -42,7 +79,9 @@ ApplicationWindow {
             }
         }
         Menu {
+            id: editMenu
             title: qsTr("&编辑")
+            background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
                 text: qsTr("清空消息\tCtrl+L")
                 enabled: bridge !== undefined && bridge !== null && !inputField.activeFocus
@@ -76,17 +115,19 @@ ApplicationWindow {
             }
         }
         Menu {
+            id: viewMenu
             title: qsTr("&视图")
+            background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
                 text: qsTr("切换主题\tCtrl+T")
                 enabled: bridge !== undefined && bridge !== null
                 onTriggered: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
             }
         }
-        // Day 20.3: 合并 4 组功能到「工具」菜单（chat / 模型 / 插件 / 自动化）
         Menu {
+            id: toolsMenu
             title: qsTr("&工具")
-            // ── 对话操作（4 项，原「聊天」菜单） ──
+            background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
                 text: qsTr("重新生成最后一条 AI 回答")
                 enabled: bridge !== undefined && bridge !== null && !bridge.isBusy && messageModel.count > 0
@@ -127,7 +168,6 @@ ApplicationWindow {
                 }
             }
             MenuSeparator {}
-            // ── 模型 / 插件 / 自动化（5 项，原「设置 / 模型 / 自动化」合并） ──
             MenuItem {
                 text: qsTr("模型管理...")
                 enabled: bridge !== undefined && bridge !== null
@@ -150,7 +190,9 @@ ApplicationWindow {
             }
         }
         Menu {
+            id: helpMenu
             title: qsTr("&帮助")
+            background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
                 text: qsTr("快捷键")
                 onTriggered: helpPopup.open()
@@ -602,13 +644,21 @@ ApplicationWindow {
                         font.bold: true
                         Layout.fillWidth: true
                     }
+                    // Day 20.6: 暗黑模式「白字 + transparent 底」不显眼，背景色绑
+                    // inputBorder 让亮/暗模式都能看见，hover 提亮为 sendBtn
                     Rectangle {
-                        width: 32; height: 32; radius: 8
-                        color: themeMa.containsMouse ? root.pal.sidebarHover : "transparent"
+                        width: 32; height: 32; radius: 16
+                        color: themeMa.containsMouse ? root.pal.sendBtn : root.pal.inputBg
+                        border.color: themeMa.containsMouse ? root.pal.sendBtnHover : root.pal.inputBorder
+                        border.width: 1
                         Text {
                             anchors.centerIn: parent
                             text: root.themeName === "dark" ? "☀️" : "🌙"
                             font.pixelSize: 14
+                            // 亮模式底浅+字深色；暗模式 hover 蓝底用白字
+                            color: themeMa.containsMouse
+                                ? "#FFFFFF"
+                                : root.pal.textPrimary
                         }
                         MouseArea {
                             id: themeMa

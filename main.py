@@ -84,6 +84,18 @@ def _setup_qt_app(app):
             color: #333;
             background: #F2F4F8;
         }
+        /* Day 20.6: QtQuick 菜单栏在暗色模式下的可见性 —— 强制深色背景 +
+           浅色字（深色下默认 #333 文字会被黑色系统背景吃掉，肉眼看不见）。
+           QMenuBar/QMenu 来自 MenuBar/Menu 的 native 渲染路径；侧边栏 ⋯
+           菜单和气泡 ⋯ 菜单走 QML Popup 不受影响，所以单独覆盖 native 那一段。 */
+        QMenuBar { background: #15161A; color: #E8E8E8; padding: 0; border: 0; }
+        QMenuBar::item { background: transparent; color: #E8E8E8; padding: 6px 10px; }
+        QMenuBar::item:selected { background: #1E2027; color: #E8E8E8; }
+        QMenu { background: #15161A; color: #E8E8E8; border: 1px solid #22232A; padding: 4px; }
+        QMenu::item { padding: 6px 22px; color: #E8E8E8; background: transparent; }
+        QMenu::item:selected { background: #1E2027; color: #FFFFFF; }
+        QMenu::item:disabled { color: #5A5E68; }
+        QMenu::separator { height: 1px; background: #22232A; margin: 4px 8px; }
     """)
     font = app.font()
     font.setFamily("Microsoft YaHei")
