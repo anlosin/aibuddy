@@ -125,6 +125,10 @@ def run_qtquick(app):
         # 改在 QTimer.singleShot(0, ...) 后再启，确保 Qt 事件循环完全就绪
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, lambda: _safe_enable_watcher(bridge))
+        # Day 20.6: 启动即拉起自动化调度器（Scheduler + 30s check_due 定时器）。
+        # 原来只在首次打开「任务管理」对话框时才懒构造 —— 不开对话框任务永远
+        # 不按时执行。同样延迟到事件循环就绪后，失败不影响主 UI。
+        QTimer.singleShot(0, lambda: _safe_start_scheduler(bridge))
         return True
     except Exception as e:
         print(f"[main] QtQuick 启动异常: {e}", file=sys.stderr, flush=True)
@@ -140,6 +144,19 @@ def _safe_enable_watcher(bridge):
         print("[main] 插件 watcher 已启用", flush=True)
     except Exception as e:
         print(f"[main] 插件 watcher 启动失败（不影响主 UI）: {e}", file=sys.stderr, flush=True)
+
+
+def _safe_start_scheduler(bridge):
+    """Day 20.6: 启动即构造自动化调度器（Scheduler + 30s check_due QTimer）。
+
+    必须在事件循环就绪后调用（QTimer 需要事件循环才能 tick）。
+    失败只打日志 —— 调度器挂了不能拖垮主界面；用户打开「任务管理」
+    对话框时 _DialogHost.scheduler 仍会走兜底懒构造路径。
+    """
+    try:
+        bridge.start_automation_scheduler()
+    except Exception as e:
+        print(f"[main] 自动化调度器启动失败（不影响主 UI）: {e}", file=sys.stderr, flush=True)
 
 
 def run_pyqt5(app):

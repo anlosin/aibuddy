@@ -77,6 +77,30 @@ class MenuMixin(object):
         return host
 
     @pyqtSlot()
+    def start_automation_scheduler(self):
+        """Day 20.6: 应用启动即构造 Scheduler + 30s check_due 定时器。
+
+        原来的缺陷：Scheduler（含 30s QTimer）只在用户第一次打开「任务管理」
+        或点「立即检查」时才经 _DialogHost.scheduler 懒构造 —— 用户不开对话框，
+        整个应用生命周期里**根本不存在定时器**，自动化任务永远不按时执行
+        （重启应用后症状重现）。main.py 在 Qt 事件循环就绪后调用本 slot。
+        host 缓存在 bridge 上、QTimer 的 parent 是 bridge，bridge 在
+        main._KEEP_ALIVE 里 —— 都不会被 GC。
+        """
+        try:
+            host = self._get_dialog_host()
+            if host is None:
+                return
+            # 访问 property 即完成懒构造 + 启动 30s QTimer（_dialog_host.py）
+            sch = host.scheduler
+            n = len(getattr(sch, "automations", []) or [])
+            print(f"[chat_bridge] 自动化调度器已启动（{n} 个任务，30s 轮询）", flush=True)
+        except Exception as e:
+            import sys
+            print(f"[chat_bridge] 启动自动化调度器失败（不影响主 UI）: {e}",
+                  file=sys.stderr, flush=True)
+
+    @pyqtSlot()
     def show_automation_manager_dialog(self):
         """Day 20.1/20.3: QtQuick 菜单栏「工具 > 任务管理」入口
 

@@ -205,6 +205,14 @@ Rectangle {
         property int currentMsgIndex: -1
         property bool currentMsgHasCode: false
 
+        // Day 20.6 修复「菜单项之间出现莫名空行」：
+        // Qt 5.15 Controls 2 的 Menu 内容项是 QQuickListView 布局，ListView
+        // **不会跳过 visible:false 的 delegate** —— 隐藏的 MenuItem/MenuSeparator
+        // 仍按 implicitHeight 占一行（实测：隐藏 MenuItem 仍占 40px）。
+        // 所以每个条件隐藏项都必须显式把 height 绑定为「可见才取 implicitHeight，
+        // 隐藏取 0」，否则「复制代码/引用回复/编辑/重新生成」等隐藏项会在菜单里
+        // 留下成片的空白行。
+
         // 普通复制（user / ai / tool_* 都给）
         MenuItem {
             text: qsTr("复制")
@@ -214,14 +222,19 @@ Rectangle {
         MenuItem {
             text: qsTr("复制代码")
             visible: bubbleMenu.currentMsgHasCode
+            height: visible ? implicitHeight : 0
             onTriggered: if (bridge) bridge.copy_code(bubbleMenu.currentMsgCode)
         }
-        MenuSeparator { visible: bubbleMenu.currentMsgHasCode }
+        MenuSeparator {
+            visible: bubbleMenu.currentMsgHasCode
+            height: visible ? implicitHeight : 0
+        }
         // 引用回复（user / ai；tool_* 不引用，太冗余）
         MenuItem {
             text: qsTr("引用回复")
             visible: bubbleMenu.currentMsgWho !== "tool_call"
                  && bubbleMenu.currentMsgWho !== "tool_result"
+            height: visible ? implicitHeight : 0
             onTriggered: {
                 if (!bridge) return
                 var q = bubbleMenu.currentMsgText.substring(0, 80)
@@ -234,16 +247,19 @@ Rectangle {
             text: qsTr("朗读")
             visible: bubbleMenu.currentMsgWho !== "tool_call"
                  && bubbleMenu.currentMsgWho !== "tool_result"
+            height: visible ? implicitHeight : 0
             onTriggered: if (bridge) bridge.speak_text(bubbleMenu.currentMsgText)
         }
         MenuSeparator {
             visible: bubbleMenu.currentMsgWho === "user"
                   || bubbleMenu.currentMsgWho === "ai"
+            height: visible ? implicitHeight : 0
         }
         // 编辑（仅 user）
         MenuItem {
             text: qsTr("编辑...")
             visible: bubbleMenu.currentMsgWho === "user"
+            height: visible ? implicitHeight : 0
             onTriggered: {
                 if (!bridge) return
                 editDialog.currentText = bubbleMenu.currentMsgText
@@ -255,6 +271,7 @@ Rectangle {
         MenuItem {
             text: qsTr("重新生成")
             visible: bubbleMenu.currentMsgWho === "ai"
+            height: visible ? implicitHeight : 0
             enabled: bridge !== undefined && bridge !== null && bridge.isBusy === false
             onTriggered: if (bridge) bridge.regenerate_ai_response(bubbleMenu.currentMsgIndex)
         }
