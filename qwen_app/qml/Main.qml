@@ -60,6 +60,7 @@ ApplicationWindow {
         // background，MenuItem 用 default delegate 覆盖 hover/selected 色。
         Menu {
             id: fileMenu
+            implicitWidth: root.menuImplicitWidth(fileMenu)
             title: qsTr("&文件")
             background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
@@ -83,6 +84,7 @@ ApplicationWindow {
         }
         Menu {
             id: editMenu
+            implicitWidth: root.menuImplicitWidth(editMenu)
             title: qsTr("&编辑")
             background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
@@ -119,6 +121,7 @@ ApplicationWindow {
         }
         Menu {
             id: viewMenu
+            implicitWidth: root.menuImplicitWidth(viewMenu)
             title: qsTr("&视图")
             background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
@@ -129,6 +132,7 @@ ApplicationWindow {
         }
         Menu {
             id: toolsMenu
+            implicitWidth: root.menuImplicitWidth(toolsMenu)
             title: qsTr("&工具")
             background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
@@ -194,6 +198,7 @@ ApplicationWindow {
         }
         Menu {
             id: helpMenu
+            implicitWidth: root.menuImplicitWidth(helpMenu)
             title: qsTr("&帮助")
             background: Rectangle { color: root.pal.topbarBg; border.color: root.pal.topbarBorder }
             MenuItem {
@@ -345,6 +350,22 @@ ApplicationWindow {
     palette.highlightedText: "#FFFFFF"
     palette.toolTipBase: root.pal.inputBg
     palette.toolTipText: root.pal.textPrimary
+
+    // ===== Day 20.6.4: Menu 弹出宽度计算（修复「点菜单没反应、不出菜单」） =====
+    // 根因（真平台探针实测）：Day 20.6 给每个子 Menu 换了自定义
+    // background: Rectangle（implicitWidth=0）后，Popup 的隐式宽度
+    // = max(background.implicitWidth, contentItem.implicitWidth) 也被拖成 0
+    // （高度正常，因为 ListView 的 implicitHeight=contentHeight）。
+    // 实测 opened=True / visible=True 但 w=0 → 弹出窗口零宽度，肉眼等于
+    // 「菜单没弹出来」。修复：按最宽 MenuItem 的 implicitWidth 显式算宽度。
+    function menuImplicitWidth(m) {
+        var mw = 0
+        for (var i = 0; i < m.count; ++i) {
+            var it = m.itemAt(i)
+            if (it) mw = Math.max(mw, it.implicitWidth)
+        }
+        return mw + 20
+    }
 
     // ===== 主题调色板（双套） =====
     readonly property var pal: ({
