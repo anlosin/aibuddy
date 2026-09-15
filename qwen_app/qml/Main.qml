@@ -39,17 +39,20 @@ ApplicationWindow {
         }
         delegate: MenuBarItem {
             id: mbi
+            // Day 20.6.1: **不要 override contentItem**。QQC2 Fusion MenuBarItem
+            // 默认 contentItem 是 IconLabel + Label，会自动把 title 里的
+            // "&文件" 渲染成「文件」并支持 Alt+F 助记符；上一版改成 Text
+            // 导致 & 字面显示（"&文件" 前面多了一个 & 符号）。
+            //
+            // 这里只覆盖 background 绑色板；contentItem 走默认 IconLabel，
+            // 文字色通过 palette.text 角色覆盖 —— Fusion 默认从
+            // control.palette.text 取色（在暗色 window 上仍是黑色，需手动
+            // 设 palette 才能跟随我们的 root.pal.textPrimary）。
+            palette.text: root.pal.textPrimary
+            palette.highlight: root.pal.sidebarHover
+            palette.highlightedText: root.pal.textPrimary
             background: Rectangle {
                 color: mbi.highlighted ? root.pal.sidebarHover : "transparent"
-            }
-            contentItem: Text {
-                text: mbi.text
-                color: root.pal.textPrimary
-                font.pixelSize: 13
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                leftPadding: 8
-                rightPadding: 8
             }
         }
         // Day 20.6: 所有下拉子菜单（Popup）也要绑色板，否则 MenuItem 还是
