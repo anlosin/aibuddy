@@ -39,18 +39,18 @@ ApplicationWindow {
         }
         delegate: MenuBarItem {
             id: mbi
-            // Day 20.6.1: **不要 override contentItem**。QQC2 Fusion MenuBarItem
-            // 默认 contentItem 是 IconLabel + Label，会自动把 title 里的
-            // "&文件" 渲染成「文件」并支持 Alt+F 助记符；上一版改成 Text
-            // 导致 & 字面显示（"&文件" 前面多了一个 & 符号）。
+            // Day 20.6.2: **只覆盖 background，不动 contentItem 也不覆盖
+            // palette 角色**。前两版分别踩坑：
+            //   ① 上一版（Day 20.6）override contentItem: Text → Text 不处理
+            //      '&' 助记符，菜单前多个 & 符号
+            //   ② Day 20.6.1 加 palette.text/highlight/highlightedText → palette
+            //      角色覆盖把 MenuBarItem 的 hover/press 状态打乱了，整个菜单
+            //      栏点不动
             //
-            // 这里只覆盖 background 绑色板；contentItem 走默认 IconLabel，
-            // 文字色通过 palette.text 角色覆盖 —— Fusion 默认从
-            // control.palette.text 取色（在暗色 window 上仍是黑色，需手动
-            // 设 palette 才能跟随我们的 root.pal.textPrimary）。
-            palette.text: root.pal.textPrimary
-            palette.highlight: root.pal.sidebarHover
-            palette.highlightedText: root.pal.textPrimary
+            // 现在仅覆盖 background 绑色板（默认 contentItem + 默认 palette
+            // 完整保留）。暗色模式下 Fusion 的 MenuBarItem 默认文字色仍是
+            // 黑色（系统 palette），但**菜单栏能点**是基本要求 —— 文字不可见
+            // 是次要问题，可通过给 QApplication 设暗色 palette（main.py）解决。
             background: Rectangle {
                 color: mbi.highlighted ? root.pal.sidebarHover : "transparent"
             }

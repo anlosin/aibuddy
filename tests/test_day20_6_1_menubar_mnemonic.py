@@ -16,12 +16,18 @@ class TestMenuBarMnemonic(unittest.TestCase):
         上一版 override 成 Text，导致 '&文件' 渲染为 '&文件'（多了一个 & 符号），
         因为只有 Label/Button 等带 text 属性的 QQC2 控件会自动处理 '&' 作为
         助记符（Alt+后一位高亮），Text 控件把它当字面字符。
+
+        注释里也允许出现「contentItem: Text」字样（Day 20.6.2 把教训写进去了），
+        只检查实际 QML 属性赋值。
         """
         m = re.search(
-            r"delegate:\s*MenuBarItem\s*\{[\s\S]+?\}\s*\n\s*\}", self.src)
+            r"delegate:\s*MenuBarItem\s*\{[^/]*?(?=\n\s*//|\n\s*Menu\s|\n\s*\})",
+            self.src, re.DOTALL)
         self.assertIsNotNone(m, "找不到 MenuBarItem delegate 块")
         block = m.group(0)
-        self.assertNotIn("contentItem: Text", block,
+        # 去掉注释行后再断言
+        block_no_comments = re.sub(r"//[^\n]*", "", block)
+        self.assertNotIn("contentItem: Text", block_no_comments,
                          "MenuBarItem 用 Text 作 contentItem 会字面显示 '&'")
 
     def test_menu_titles_keep_ampersand_mnemonic(self):
