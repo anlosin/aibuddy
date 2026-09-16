@@ -28,9 +28,13 @@ from datetime import datetime, timedelta
 from .plugin_manager import get_enabled_tools
 from .config import load_models, make_openai_client
 
-# scheduler.py 位于 qwen_app/ 内，运行时数据（automations.json 等）统一在 data/
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+from . import paths
+
+# 只读资源根（源码态=项目根；打包态=_MEIPASS）
+PROJECT_ROOT = paths.resource_dir()
+# 运行时数据（automations.json 等）统一在「可写数据目录」：
+# 源码态=<项目根>/data；打包态=exe 同级 data/（不可写回退 %APPDATA%\qwen）
+DATA_DIR = paths.data_dir()
 AUTOMATIONS_FILE = os.path.join(DATA_DIR, "automations.json")
 RUNS_FILE = os.path.join(DATA_DIR, "automation_runs.json")
 LOG_DIR = os.path.join(DATA_DIR, "automation_logs")

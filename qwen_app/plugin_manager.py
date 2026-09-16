@@ -6,11 +6,18 @@ import importlib.util
 import copy
 
 
-# plugin_manager.py 位于 qwen_app/ 内，plugins/ 在项目根目录
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from . import paths
 
 
-PLUGINS_DIR = os.path.join(PROJECT_ROOT, "plugins")
+# 只读资源根（源码态=项目根；打包态=_MEIPASS）。保留导出以兼容既有调用方。
+PROJECT_ROOT = paths.resource_dir()
+
+# 生效的插件目录。
+#   源码态 = <项目根>/plugins（与历史行为一致）
+#   打包态 = <exe 同级>/plugins（用户可增删改、QFileSystemWatcher 监视它做热重载）；
+#            外部目录不存在/为空时回退到内置插件模板（_MEIPASS/plugins）。
+# 详见 qwen_app/paths.py。
+PLUGINS_DIR = paths.plugins_dir()
 
 # ── 版本号比较 ──
 

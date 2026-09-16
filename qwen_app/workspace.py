@@ -12,9 +12,13 @@ import threading
 import time
 
 # ── 路径常量 ──
-# 项目根 = 本文件父目录的父目录（即 qwen_app/workspace.py -> qwen_app/ -> 项目根）
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_BASE = os.path.join(_PROJECT_ROOT, ".workbuddy", "workspaces")
+from . import paths
+
+# 对话/定时任务工作目录的父目录（惰性创建）。
+# 源码态 = <项目根>/.workbuddy/workspaces（与历史一致）
+# 打包态 = <可写数据目录>/workspaces —— 工作区产物是用户数据，绝不能被塞进
+#          _MEIPASS（PyInstaller 临时解包目录，进程退出即删）。
+_DEFAULT_BASE = paths.workspaces_base()
 
 # 兼容：若老配置写了 workspace_root，作为「父目录」使用（指向哪里就在那里建 .workspaces/）
 # 不再单独保留顶层目录配置。
@@ -70,13 +74,15 @@ def cron_workspace_path(auto_id, created_at=None):
 
 
 def cron_shared_workspace_path():
-    """定时任务共享工作目录：项目根的 data/ 下。
+    """定时任务共享工作目录：可写数据目录（data/）下。
 
     适用场景：跨任务/跨日期需要累积的数据（如金价日志、硬件价格历史）。
     与每个任务独立目录的设计互补——本目录由显式标记 "workspace": "shared"
     的任务使用，普通任务的产物仍在 cron_<id>_<ts>/ 隔离目录。
+
+    源码态 = <项目根>/data；打包态 = exe 同级 data/（便携）。
     """
-    return os.path.join(_PROJECT_ROOT, "data")
+    return paths.data_dir()
 
 
 def _ts_from_iso(iso):

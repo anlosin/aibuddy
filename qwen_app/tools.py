@@ -1,22 +1,16 @@
 """默认配置（工具定义已迁移到 plugins/ 目录）"""
 
-import os
+from . import paths
 
 
 def _scan_plugins():
-    """扫描 plugins/ 目录，返回所有插件名（不含 __init__）"""
-    # tools.py 现在位于 qwen_app/ 内，plugins/ 在项目根目录
-    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugins")
-    names = []
-    try:
-        for f in sorted(os.listdir(base)):
-            # Day 20.6.12：排除下划线开头的包内私有模块（__init__ / _secret_store /
-            # _cmd_blocklist），它们不是插件，不应出现在启用列表里。
-            if f.endswith(".py") and not f.startswith("_"):
-                names.append(f[:-3])
-    except Exception:
-        pass
-    return names
+    """扫描生效的插件目录，返回所有插件名（不含 __init__ 与私有模块）
+
+    统一走 qwen_app.paths.scan_plugin_names()（与 config._scan_plugins 同源）。
+    打包态会同时覆盖「exe 同级 plugins/」与内置插件，用户新增的插件因此也能
+    出现在默认启用列表里。
+    """
+    return paths.scan_plugin_names()
 
 
 DEFAULT_CONFIG = {

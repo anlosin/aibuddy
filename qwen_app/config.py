@@ -5,10 +5,16 @@ import sqlite3
 import threading
 
 
-# 包目录（qwen_app/）与项目根目录
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 运行时数据统一收纳在 data/（json、日志、数据库、知识库等），根目录保持干净
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+from . import paths
+
+# 只读资源根：源码态 = 项目根；打包态 = PyInstaller 的 _MEIPASS。
+# （仅用于定位随程序分发的只读资源，不要往这里写文件。）
+PROJECT_ROOT = paths.resource_dir()
+# 运行时数据统一收纳在「可写数据目录」（json、数据库、知识库等）：
+#   源码态 = <项目根>/data（与历史行为完全一致）
+#   打包态 = exe 同级 data/（便携，整个文件夹可拷走）；目录不可写则回退 %APPDATA%\qwen
+# 详见 qwen_app/paths.py 的说明。
+DATA_DIR = paths.data_dir()
 
 CONFIG_PATH = os.path.join(DATA_DIR, "model_config.json")
 CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
@@ -673,19 +679,13 @@ def save_conversations(conversations, current_id):
 # ═══ 插件状态 ═══
 
 def _scan_plugins():
-    """扫描 plugins/ 目录，返回所有插件名（不含 __init__）"""
-    base = os.path.join(PROJECT_ROOT, "plugins")
-    names = []
-    try:
-        for f in sorted(os.listdir(base)):
-            # Day 20.6.12：下划线开头的是包内私有模块（__init__ / _secret_store /
-            # _cmd_blocklist），不是插件 —— 此前只排除 __init__.py，导致它们被
-            # 当成"默认启用的插件"出现在设置界面里（勾选无效，纯噪声）。
-            if f.endswith(".py") and not f.startswith("_"):
-                names.append(f[:-3])
-    except Exception:
-        pass
-    return names
+    """扫描生效的插件目录，返回所有插件名（不含私有模块）
+
+    统一走 qwen_app.paths.scan_plugin_names()：同一份实现曾被 config 与 tools
+    各抄一遍。打包态下会同时覆盖「exe 同级 plugins/」与内置插件，用户新增的
+    插件因此也能出现在默认启用列表里。
+    """
+    return paths.scan_plugin_names()
 
 
 def load_plugin_state():
