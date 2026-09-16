@@ -181,6 +181,23 @@ def run_pyqt5(app):
     return True
 
 
+def _safe_migrate_api_keys():
+    """Day 20.6.12: 启动期把磁盘上残留的明文 API Key 迁移进系统凭据库。
+
+    幂等；只在 keyring 真实可用且写入成功后才重写磁盘，否则保留明文
+    （宁可暂时留明文，也不能出现「磁盘清了、凭据库没存上」的丢 Key）。
+    此处是单线程启动期，不会与 GUI / 调度器线程并发写配置文件。
+    失败只打日志，绝不阻塞启动。
+    """
+    try:
+        from qwen_app.config import migrate_api_keys_to_keyring
+        moved, detail = migrate_api_keys_to_keyring()
+        if moved:
+            print(f"[main] API Key 已迁移到系统凭据库（{detail}）", flush=True)
+    except Exception as e:
+        print(f"[main] API Key 迁移跳过（不影响启动）: {e}", file=sys.stderr, flush=True)
+
+
 def main():
     args = sys.argv[1:]
     force_pyqt5 = "--pyqt5" in args
@@ -190,6 +207,7 @@ def main():
     _set_qt_attributes()              # 必须在 QApplication 之前
     app = QApplication(sys.argv)
     _setup_qt_app(app)
+    _safe_migrate_api_keys()
 
     if force_pyqt5:
         run_pyqt5(app)

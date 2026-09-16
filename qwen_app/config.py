@@ -277,22 +277,171 @@ def _migrate_legacy_user_version(db):
 
 # ═══ 模型配置 ═══
 
+# ═══ API Key 安全存储（系统凭据库 / keyring） ═══
+# 目标（Day 20.6.12，audit_verification.md P0-SEC-7）：
+#   api_key 不再明文写进 data/model_config.json。项目**本来就有**
+#   plugins/_secret_store（keyring + 内存降级，ssh/sql 密码均已接入），
+#   API Key 是当时唯一漏网的敏感字段 —— 属于自身不一致而非新增需求。
+#
+# 降级策略（关键，防止把用户的 Key 弄丢）：
+#   **只有 keyring 真实可用时才脱敏磁盘**；不可用时保持明文落盘不动。
+#   宁可暂时保留既有明文，也不能出现「磁盘清了、keyring 没存上」的丢 Key。
+_MODEL_KEY_SERVICE = "model"
+_KEY_CACHE = {}
+
+
+def _get_secret_store():
+    """返回 plugins._secret_store 模块；不可用返回 None（此时不做任何脱敏）"""
+    try:
+        from plugins import _secret_store as ss
+        return ss
+    except Exception:
+        return None
+
+
+def _model_secret_name(m):
+    """模型在凭据库里的条目名（优先用不可变的 id）"""
+    return str(m.get("id") or m.get("model_id") or m.get("name") or "default")
+
+
+def _keyring_usable():
+    ss = _get_secret_store()
+    try:
+        return ss if (ss and ss.is_available()) else None
+    except Exception:
+        return None
+
+
+def _read_key(ss, name):
+    """带进程内缓存的读取：一次会话内同一模型只查一次凭据库"""
+    if name in _KEY_CACHE:
+        return _KEY_CACHE[name]
+    try:
+        v = ss.get_secret(_MODEL_KEY_SERVICE, name)
+    except Exception:
+        v = None
+    if v:
+        _KEY_CACHE[name] = v
+    return v
+
+
+def _sanitize_api_keys(cfg):
+    """写盘前：把 api_key 存进系统凭据库，磁盘上只留空字符串
+
+    仅当 keyring 真可用时脱敏；任一步失败都会保留原明文（不丢 Key）。
+    """
+    ss = _keyring_usable()
+    if not ss:
+        return cfg
+    out = dict(cfg)
+    models = out.get("models")
+    if isinstance(models, list):
+        new_models = []
+        for m in models:
+            if isinstance(m, dict):
+                m2 = dict(m)
+                key = (m2.get("api_key") or "").strip()
+                if key:
+                    name = _model_secret_name(m2)
+                    try:
+                        ss.set_secret(_MODEL_KEY_SERVICE, name, key)
+                        _KEY_CACHE[name] = key
+                        m2["api_key"] = ""
+                    except Exception:
+                        pass          # 存不进去就保留明文，宁可不脱敏也不丢 Key
+                new_models.append(m2)
+            else:
+                new_models.append(m)
+        out["models"] = new_models
+    # 兼容旧版扁平字段
+    flat = (out.get("api_key") or "").strip()
+    if flat:
+        try:
+            ss.set_secret(_MODEL_KEY_SERVICE, "flat", flat)
+            _KEY_CACHE["flat"] = flat
+            out["api_key"] = ""
+        except Exception:
+            pass
+    return out
+
+
+def _hydrate_api_keys(cfg):
+    """读盘后：磁盘为空但凭据库里有 → 填回内存字典
+
+    磁盘上若仍是明文（尚未迁移 / 脱敏失败），原样保留不动 —— 兼容旧数据。
+    """
+    ss = _get_secret_store()
+    if not ss:
+        return cfg
+    models = cfg.get("models")
+    if isinstance(models, list):
+        for m in models:
+            if isinstance(m, dict) and not (m.get("api_key") or "").strip():
+                v = _read_key(ss, _model_secret_name(m))
+                if v:
+                    m["api_key"] = v
+    if not (cfg.get("api_key") or "").strip():
+        v = _read_key(ss, "flat")
+        if v:
+            cfg["api_key"] = v
+    return cfg
+
+
 def load_config():
-    """加载模型配置，返回字典"""
+    """加载模型配置，返回字典（api_key 由系统凭据库回填）"""
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                return _hydrate_api_keys(json.load(f))
     except Exception:
         pass
     return {}
 
 
 def save_config(cfg):
-    """保存模型配置"""
+    """保存模型配置（api_key 存入系统凭据库，磁盘不留明文）"""
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    safe_cfg = _sanitize_api_keys(cfg)
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        json.dump(safe_cfg, f, ensure_ascii=False, indent=2)
+    # 内存中的调用方字典不应被"顺手清空"——保持调用方拿到的对象原样
+    return safe_cfg
+
+
+def migrate_api_keys_to_keyring():
+    """把磁盘上残留的明文 api_key 迁移进系统凭据库（幂等）
+
+    由 main.py 在启动期调用一次（单线程，避免与 GUI / 调度器线程并发写盘）。
+    返回 (是否发生迁移, 说明)。
+
+    安全前提：只有 keyring 真实可用、且 _sanitize_api_keys 成功把 Key 写进
+    凭据库（写失败会保留明文）时才重写磁盘 —— 保证不会出现
+    「磁盘清了、凭据库没存上」的用户 Key 丢失。
+    """
+    if not os.path.exists(CONFIG_PATH):
+        return False, "无配置文件，跳过"
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception as e:
+        return False, f"读取失败: {e}"
+
+    has_plaintext = bool((raw.get("api_key") or "").strip()) or any(
+        isinstance(m, dict) and (m.get("api_key") or "").strip()
+        for m in (raw.get("models") or [])
+    )
+    if not has_plaintext:
+        return False, "磁盘无明文，无需迁移"
+    if not _keyring_usable():
+        return False, "系统凭据库不可用，保留明文（避免丢 Key）"
+
+    safe = _sanitize_api_keys(raw)
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(safe, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return False, f"写回失败: {e}"
+    return True, "已迁移到系统凭据库"
 
 
 # ── 多模型注册表 ──
