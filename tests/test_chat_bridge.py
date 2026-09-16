@@ -93,6 +93,7 @@ class TestStopChat(unittest.TestCase):
         b.finalizeLast.connect(lambda who: finalize_calls.append(who))
         b.messageReplaced.connect(lambda who, text: replace_calls.append(who))
         b.start_real_chat("hello", use_fake=True)
+        b._on_worker_chunk("部分内容", False)  # Day 20.6.7: 流式已开始（气泡已建立）
         b.stop_chat()  # \u7acb\u5373\u8c03\u7528\uff08worker \u8fd8\u5728\u8dd1 fake \u751f\u6210\u5668\uff09
         _pump(1500)  # \u7b49 worker \u9000\u51fa
         # stop_chat \u672c\u8eab\u4f1a\u89e6\u53d1 finalizeLast + messageReplaced\uff08\u8be5 worker \u6ca1\u8d70\u5230 complete\uff09

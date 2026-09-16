@@ -109,10 +109,12 @@ class StreamMixin(object):
         self._worker.finished.connect(lambda wt=self._worker: wt.deleteLater())
         # 启动
         self._set_busy(True)
-        # 先发一个空 ai 气泡占位（流式会填进去）
-        ts = datetime.now().strftime("%H:%M")
-        self._last_who = "ai"
-        self.messageAdded.emit("ai", self._mk_msg("", ts))
+        # Day 20.6.7 修复：不再预发「空 ai 占位气泡」。思考模型（QwQ 等）
+        # 第一批流式 chunk 是 thinking —— _on_worker_chunk 的切段逻辑看到
+        # who != _last_who 就另建 thinking 气泡，正文再建第三个，预占位的
+        # 空 ai 气泡永远没人填 → 「每次对话后有一个空回复」。
+        # 改为首个 chunk 到来时由切段逻辑建气泡（_last_who 初始为 None，
+        # None != 任何 who 必然触发 messageAdded），无响应/中断时也不会留空气泡。
         # Day 18 (H1)：启动 worker 时 +1 计数（reload_plugins 据此判断能否重载）
         with self._worker_count_lock:
             self._worker_count += 1
