@@ -1,11 +1,11 @@
-"""网页搜索技能 —— 通过 DuckDuckGo 搜索网页（三重回退策略）"""
+"""网页搜索技能 —— 四重回退策略（Bing 首选，国内直连可达）"""
 import urllib.request
 import urllib.parse
 
 PLUGIN_INFO = {
     "name": "网页搜索",
-    "description": "通过 DuckDuckGo 搜索互联网信息，获取最新资讯",
-    "version": "1.1.0",
+    "description": "通过 Bing / DuckDuckGo 搜索互联网信息，获取最新资讯",
+    "version": "1.2.0",
 }
 
 SYSTEM_PROMPT = """你是一个可以搜索互联网的AI助手。当用户询问最新信息、实时数据、新闻事件时，请使用 web_search 工具搜索互联网获取准确信息。
@@ -41,7 +41,59 @@ TOOLS = [
 ]
 
 
-# ── 策略1：duckduckgo_search / ddgs 库（最稳定） ──
+# ── 策略1：Bing 网页抓取（国内直连可达，首选） ──
+def _search_via_bing(query, max_results=5):
+    """通过 Bing 搜索结果页提取结果（正则切 <li class="b_algo"> 块，零依赖）"""
+    try:
+        import re
+        import html as H
+        url = "https://www.bing.com/search?" + urllib.parse.urlencode({
+            "q": query, "mkt": "zh-CN", "setlang": "zh-CN",
+        })
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode("utf-8", errors="replace")
+
+        blocks = re.findall(r'<li class="b_algo".*?</li>', content, re.DOTALL)
+        lines = []
+        for b in blocks:
+            if len(lines) >= max_results:
+                break
+            m = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a></h2>', b, re.DOTALL)
+            if not m:
+                m = re.search(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', b, re.DOTALL)
+            if not m:
+                continue
+            href = m.group(1)
+            # 过滤 Bing 自家推广/首页项（反爬降级页会混入）
+            if re.match(r'https?://(www\.)?(cn\.)?bing\.com/?$', href):
+                continue
+            title = H.unescape(re.sub(r'<[^>]+>', '', m.group(2))).strip()
+            if not title:
+                continue
+            sm = re.search(r'<p[^>]*>(.*?)</p>', b, re.DOTALL)
+            snippet = ""
+            if sm:
+                snippet = H.unescape(re.sub(r'<[^>]+>', '', sm.group(1))).strip()
+            line = f"{len(lines) + 1}. {title or '无标题'}"
+            if snippet:
+                line += f"\n   {snippet}"
+            if href:
+                line += f"\n   🔗 {href}"
+            lines.append(line)
+        if lines:
+            return "\n\n".join(lines)
+        return None
+    except Exception as e:
+        print(f"[web_search] Bing 搜索错误: {e}")
+        return None
+
+
+# ── 策略2：duckduckgo_search / ddgs 库（最稳定，需外网/代理） ──
 def _search_via_library(query, max_results=5):
     """通过 duckduckgo_search / ddgs 库搜索"""
     # 先后尝试新包名 ddgs 和旧包名 duckduckgo_search
@@ -246,23 +298,28 @@ def _search_via_html(query, max_results=5):
         return None
 
 
-# ── 主搜索入口（三重回退） ──
+# ── 主搜索入口（四重回退） ──
 def _search_duckduckgo(query, max_results=5):
-    """三重回退策略搜索"""
+    """四重回退策略搜索（Bing 首选：国内直连可达）"""
     if not query or not query.strip():
         return "请提供搜索关键词。"
 
-    # 策略1：duckduckgo_search 库
+    # 策略1：Bing 网页抓取（国内直连可达）
+    result = _search_via_bing(query, max_results)
+    if result:
+        return f"[搜索: {query}]\n\n{result}"
+
+    # 策略2：duckduckgo_search 库（需外网/代理）
     result = _search_via_library(query, max_results)
     if result:
         return f"[搜索: {query}]\n\n{result}"
 
-    # 策略2：DuckDuckGo Instant Answer API
+    # 策略3：DuckDuckGo Instant Answer API
     result = _search_via_api(query, max_results)
     if result:
         return f"[搜索: {query}]\n\n{result}"
 
-    # 策略3：HTML 正则抓取
+    # 策略4：DuckDuckGo HTML 正则抓取
     result = _search_via_html(query, max_results)
     if result:
         return f"[搜索: {query}]\n\n{result}"
