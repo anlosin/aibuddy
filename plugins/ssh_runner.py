@@ -92,26 +92,40 @@ def _save_cfg():
     密码通过 _secret_store 加密保存到 Windows 凭据管理器 / macOS Keychain /
     Linux Secret Service，重启后无需重输。keyring 不可用时退到内存缓存。
     如需修改密码，重新调用 ssh_connect 即可覆盖。
+
+    Day 20.6.12 修复（实测发现，比审计报告更严重）：
+      此前写的是 `from . import _secret_store` —— 相对导入在插件里**必然
+      ImportError**，因为 plugin_manager 用 spec_from_file_location 以独立模块名
+      （plugin_ssh_runner）加载插件，__package__ 为空字符串。
+      而该异常被外层 `except Exception: pass` 吞掉 → **连 sanitized 配置都不写盘**，
+      表现是「ssh_connect 报成功、重启后连接全消失」。
+      现改为绝对导入（与其它插件的 `from qwen_app.xxx import ...` 同模式），
+      且导入失败/写盘失败都显式告警，不再静默。
     """
     try:
-        from . import _secret_store
-        sanitized = {}
-        for name, cfg in _CFG.items():
-            if isinstance(cfg, dict):
-                c = dict(cfg)
-                pw = c.pop("password", None) or ""
-                kp = c.pop("key_passphrase", None) or ""
-                if pw:
-                    _secret_store.set_secret("ssh", name, pw)
-                if kp:
-                    _secret_store.set_secret("ssh", f"{name}#keypass", kp)
-                sanitized[name] = c
-            else:
-                sanitized[name] = cfg
+        from plugins import _secret_store
+    except Exception as e:                # noqa: BLE001 — 降级必须可控，但要留痕
+        _secret_store = None
+        print(f"[ssh_runner] _secret_store 不可用，密码无法存入凭据库: {e}")
+
+    sanitized = {}
+    for name, cfg in _CFG.items():
+        if isinstance(cfg, dict):
+            c = dict(cfg)
+            pw = c.pop("password", None) or ""
+            kp = c.pop("key_passphrase", None) or ""
+            if pw and _secret_store:
+                _secret_store.set_secret("ssh", name, pw)
+            if kp and _secret_store:
+                _secret_store.set_secret("ssh", f"{name}#keypass", kp)
+            sanitized[name] = c
+        else:
+            sanitized[name] = cfg
+    try:
         with open(CONN_FILE, "w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    except Exception as e:                # noqa: BLE001
+        print(f"[ssh_runner] 连接配置写盘失败: {e}")
 
 
 def _refuse_if_blocked(command):
@@ -165,7 +179,7 @@ def _connect(cfg):
         key_path = cfg.get("key_path")
         # 密码解析：先从系统凭据库取（keyring），再回退 cfg 内（兼容旧残留）
         try:
-            from . import _secret_store
+            from plugins import _secret_store
             password = _secret_store.get_secret("ssh", cfg.get("name") or "default") or cfg.get("password")
             key_passphrase = _secret_store.get_secret("ssh", f"{cfg.get('name') or 'default'}#keypass") or cfg.get("key_passphrase")
         except Exception:
@@ -256,7 +270,7 @@ def _do_command(args):
         stdin, stdout, stderr = client.exec_command(run_cmd, timeout=timeout)
         if use_sudo:
             try:
-                from . import _secret_store
+                from plugins import _secret_store
                 pw = _secret_store.get_secret("ssh", name) or _CFG.get(name, {}).get("password", "")
             except Exception:
                 pw = _CFG.get(name, {}).get("password", "")

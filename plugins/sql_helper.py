@@ -118,24 +118,35 @@ def _save_cfg():
     macOS Keychain / Linux Secret Service），重启后无需重输。如需修改
     密码，重新调用 db_connect 即可覆盖。keyring 不可用时退到内存缓存
     （仅本次会话有效）。
+
+    Day 20.6.12 修复：此前用 `from . import _secret_store` 相对导入，而插件由
+    plugin_manager 以独立模块名加载（__package__ == ''），该导入**必然
+    ImportError**，且被外层 `except Exception: pass` 吞掉 → **连 sanitized
+    配置都不写盘**（db_connect 报成功、重启后连接消失）。改为绝对导入，
+    失败时显式告警。
     """
     try:
-        from . import _secret_store
-        sanitized = {}
-        for name, cfg in _CFG.items():
-            if isinstance(cfg, dict):
-                c = dict(cfg)
-                pw = c.pop("password", None) or ""
-                # 密码另存到系统凭据库（同名覆盖）
-                if pw:
-                    _secret_store.set_secret("sql", name, pw)
-                sanitized[name] = c
-            else:
-                sanitized[name] = cfg
+        from plugins import _secret_store
+    except Exception as e:                # noqa: BLE001 — 降级必须可控，但要留痕
+        _secret_store = None
+        print(f"[sql_helper] _secret_store 不可用，密码无法存入凭据库: {e}")
+
+    sanitized = {}
+    for name, cfg in _CFG.items():
+        if isinstance(cfg, dict):
+            c = dict(cfg)
+            pw = c.pop("password", None) or ""
+            # 密码另存到系统凭据库（同名覆盖）
+            if pw and _secret_store:
+                _secret_store.set_secret("sql", name, pw)
+            sanitized[name] = c
+        else:
+            sanitized[name] = cfg
+    try:
         with open(CONN_FILE, "w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    except Exception as e:                # noqa: BLE001
+        print(f"[sql_helper] 连接配置写盘失败: {e}")
 
 
 def _connect(cfg):
@@ -146,7 +157,7 @@ def _connect(cfg):
     password = ""
     if db_type in ("mysql", "postgresql"):
         try:
-            from . import _secret_store
+            from plugins import _secret_store
             password = _secret_store.get_secret("sql", conn_name) or cfg.get("password", "")
         except Exception:
             password = cfg.get("password", "")

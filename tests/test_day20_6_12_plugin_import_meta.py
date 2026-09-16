@@ -19,6 +19,7 @@
   6. schema 规范化 —— get_enabled_tools 对全部插件都不炸且补齐 additionalProperties
   7. 与生产路径一致 —— discover_plugins 不得静默跳过任何一个插件
 """
+import ast
 import os
 import sys
 import unittest
@@ -75,6 +76,31 @@ class TestPluginLoadingContract(unittest.TestCase):
         if self.errors:
             detail = "\n".join(f"  - {k}: {v}" for k, v in sorted(self.errors.items()))
             self.fail(f"{len(self.errors)} 个插件加载失败：\n{detail}")
+
+    def test_no_relative_imports(self):
+        """插件不得使用包内相对导入 —— 在插件里必然 ImportError
+
+        plugin_manager 用 spec_from_file_location 以独立模块名（plugin_xxx）
+        加载插件，模块 __package__ 为空字符串，`from . import x` 会抛
+        "attempted relative import with no known parent package"。
+        Day 20.6.12 实测发现 ssh_runner / sql_helper 的 `from . import _secret_store`
+        正因如此静默失效（连接配置不写盘、keyring 从未生效），故用 AST 钉死，
+        防止后人再写回相对导入。
+        """
+        bad = []
+        for n in self.names:
+            full = os.path.join(PLUGINS_DIR, n + ".py")
+            with open(full, "r", encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=full)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.level or 0) > 0:
+                    dots = "." * node.level
+                    bad.append(f"{n}.py:{node.lineno}: from {dots}{node.module or ''} import ...")
+        self.assertEqual(
+            bad, [],
+            "插件不得使用包内相对导入（加载时 __package__ 为空，必然 ImportError）：\n  "
+            + "\n  ".join(bad),
+        )
 
     def test_plugin_info_contract(self):
         for n in self.names:
