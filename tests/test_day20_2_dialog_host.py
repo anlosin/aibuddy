@@ -132,17 +132,34 @@ class TestDialogHostBasics(unittest.TestCase):
         self.bridge._plugin_infos_cache = None
 
     def test_enabled_plugins_roundtrip(self):
+        """Day 20.6.6 修复：finally 必须区分「键不存在」与「显式空列表」。
+
+        旧版 `original = cfg.get("enabled_plugins", [])` 在键不存在时拿到
+        []，finally 把 `enabled_plugins: []` 显式写盘 —— 语义从
+        「未配置=默认全启用」被永久污染成「显式空=全禁用」，每次全量回归
+        都污染一次（导致 weather 自动化任务 7/25 起从未调用过工具，模型
+        一直编造假天气）。None 表示键不存在，恢复时同样删除键。
+        """
         from qwen_app import config as _cfg
         cfg = _cfg.load_config()
-        original = cfg.get("enabled_plugins", [])
+        original = cfg.get("enabled_plugins")   # None = 键不存在（默认全启用）
         try:
             self.host.enabled_plugins = ["calc", "weather"]
             self.assertEqual(self.host.enabled_plugins, ["calc", "weather"])
             cfg2 = _cfg.load_config()
             self.assertEqual(cfg2.get("enabled_plugins"), ["calc", "weather"])
         finally:
-            cfg["enabled_plugins"] = original
+            if original is None:
+                cfg.pop("enabled_plugins", None)
+            else:
+                cfg["enabled_plugins"] = original
             _cfg.save_config(cfg)
+            # 恢复后校验：键的状态必须回到实验前
+            cfg3 = _cfg.load_config()
+            if original is None:
+                self.assertNotIn("enabled_plugins", cfg3)
+            else:
+                self.assertEqual(cfg3.get("enabled_plugins"), original)
 
     def test_save_settings_persists(self):
         from qwen_app import config as _cfg
