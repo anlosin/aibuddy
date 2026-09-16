@@ -12,7 +12,9 @@
 安全设计：
 - 复用 shell_runner 的破坏性命令黑名单（命中直接拒绝），避免误删远程主机文件
 - 连接失败 / 认证失败返回友好错误，不抛异常崩溃
-- 默认 AutoAddPolicy 方便内网（未知主机密钥自动接受），可通过 auto_add_host_key=false 关闭
+- 默认 RejectPolicy（**不**自动接受未知主机密钥，防中间人攻击）；
+  确认可信的内网主机可显式传 auto_add_host_key=true
+  （Day 20.6.12 前默认 AutoAddPolicy，属默认敞口）
 """
 import os
 import re
@@ -47,28 +49,15 @@ CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data
 
 OUTPUT_LIMIT = 8000  # 远程命令输出截断上限（字符）
 
-# ── 破坏性命令黑名单（与 shell_runner 保持一致，命中直接拒绝）──
-BLOCKED_PATTERNS = [
-    r"\brm\s+-rf\s+/",
-    r"\brm\s+-rf\s+/\*",
-    r"\brd\s+/s",
-    r"\bdel\s+/[sqf]",
-    r"\bformat\s+[a-z]:",
-    r"\bmkfs",
-    r"\bdd\s+if=.*of=/dev/",
-    r">\s*/dev/sd",
-    r":\(\).*\{\s*:\|:",
-    r"\bshutdown\b",
-    r"\breboot\b",
-    r"\bhalt\b",
-    r"\bpoweroff\b",
-    r"\bfdisk\b",
-    r"\bparted\b",
-    r"\bchmod\s+-R\s+0",
-    r"\btruncate\s+-s\s+0\s+/",
-    r"\bmkfs\.",
-]
-_BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
+# ── 破坏性命令黑名单：与 shell_runner 共用同一份（Day 20.6.12）──
+# 这里原先自带 17 条并注释「与 shell_runner 保持一致」，但实际缺 shell_runner
+# Day 18 (H7) 的全部加固（python -c / cmd /c / powershell -Command / xargs /
+# for-do-done）——**注释说谎比缺陷本身更危险**，后人会以为两边已对齐。
+# 现改为 import 单一事实来源 plugins/_cmd_blocklist.py，物理上无法再漂移。
+from plugins._cmd_blocklist import (      # noqa: E402
+    BLOCKED_PATTERNS,
+    refuse_if_blocked as _refuse_if_blocked,
+)
 
 # 同进程内连接缓存：name -> paramiko.SSHClient
 _CLIENTS = {}
@@ -128,15 +117,6 @@ def _save_cfg():
         print(f"[ssh_runner] 连接配置写盘失败: {e}")
 
 
-def _refuse_if_blocked(command):
-    for r in _BLOCKED_RE:
-        if r.search(command or ""):
-            return ("⛔ 出于安全考虑，该命令被拒绝执行（命中破坏性操作黑名单：%s）。"
-                    "如需执行，请改用更安全的等价写法，或联系管理员调整策略。"
-                    % r.pattern)
-    return None
-
-
 def _get_client(name):
     """获取（必要时重连）指定名称的 SSHClient，返回 (client, err)"""
     if name in _CLIENTS and _CLIENTS[name] is not None:
@@ -165,7 +145,7 @@ def _connect(cfg):
         return None, "缺少依赖 paramiko，请在项目 venv 中执行：pip install paramiko"
     try:
         client = paramiko.SSHClient()
-        if cfg.get("auto_add_host_key", True):
+        if cfg.get("auto_add_host_key", False):
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         else:
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
@@ -197,6 +177,14 @@ def _connect(cfg):
         client.connect(**kwargs)
         return client, None
     except Exception as e:
+        msg = str(e)
+        if "not found in known_hosts" in msg or "Unknown server" in msg:
+            return None, (
+                "连接失败: 目标主机密钥不在 known_hosts 中。"
+                "出于防中间人攻击的考虑，默认不自动信任未知主机。\n"
+                f"（原始错误: {msg}）\n"
+                "确认该主机可信后，可重新调用 ssh_connect 并传 auto_add_host_key=true，"
+                "或先手工把主机密钥写入 known_hosts。")
         return None, f"连接失败: {e}"
 
 
@@ -209,7 +197,7 @@ def _do_connect(args):
         "password": args.get("password", ""),
         "key_path": args.get("key_path"),
         "key_passphrase": args.get("key_passphrase", ""),
-        "auto_add_host_key": bool(args.get("auto_add_host_key", True)),
+        "auto_add_host_key": bool(args.get("auto_add_host_key", False)),
         "timeout": int(args.get("timeout", 15)),
     }
     if not cfg.get("host"):
@@ -390,7 +378,7 @@ TOOLS = [
                     "password": {"type": "string", "description": "密码（与 key_path 二选一）"},
                     "key_path": {"type": "string", "description": "私钥文件路径（与 password 二选一，如 ~/.ssh/id_rsa）"},
                     "key_passphrase": {"type": "string", "description": "若私钥有密码保护，提供 passphrase"},
-                    "auto_add_host_key": {"type": "boolean", "description": "是否自动接受未知主机密钥（内网方便，默认 true）", "default": True},
+                    "auto_add_host_key": {"type": "boolean", "description": "是否自动接受未知主机密钥。默认 false（防中间人攻击）；仅在确认主机可信的内网环境才显式设为 true", "default": False},
                     "timeout": {"type": "integer", "description": "连接超时秒数，默认 15", "default": 15}
                 },
                 "required": ["host", "user"]

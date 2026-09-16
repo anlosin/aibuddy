@@ -151,6 +151,16 @@ def _do_code(args):
         return "错误: 未提供 code"
     if lang not in LANG_EXT:
         return "错误: 不支持的语言 '%s'（支持 python / go / java）" % lang
+    # Day 20.6.12（P0-SEC-2）：run_code 此前零检查，而它执行的同样是任意代码
+    # （Python 可 os.system、Java 可 Runtime.exec）。与 shell_runner.run_python
+    # 口径一致，对代码文本做黑名单筛查。注意这是「尽力而为」的护栏，不是沙箱。
+    try:
+        from plugins._cmd_blocklist import refuse_if_blocked
+        refuse = refuse_if_blocked(code)
+        if refuse:
+            return refuse
+    except ImportError:
+        pass
     timeout = int(args.get("timeout", 30))
     if timeout <= 0 or timeout > 300:
         timeout = 30

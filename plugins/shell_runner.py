@@ -30,58 +30,19 @@ SYSTEM_PROMPT = """你拥有在本地机器执行命令和脚本的能力（shel
 - 不要执行破坏性命令（如 rm -rf /、格式化磁盘、关机重启等），插件会直接拒绝
 - 涉及重要数据或批量操作前，先用 ls / 预览确认影响范围
 - 复杂任务先写脚本文件再用 run_script 运行，便于复用与人工审查
+- run_python 执行的是**任意代码**，黑名单只能拦住明显的破坏性写法、
+  不构成沙箱；请勿在代码里执行不可逆操作（删除 / 格式化 / 改权限）
 """
 
-# ── 破坏性命令黑名单：命中直接拒绝执行 ──
-# 说明：run_command 保留 shell=True 以支持管道/重定向/内建命令（这是本插件
-# "干活"能力的核心），因此安全边界压缩到黑名单广度。黑名单覆盖越权重命名、
-# 参数变体(-rf/-fr/-r -f)、家目录/敏感绝对路径删除、Windows PowerShell/CMD
-# 递归删除、远程下载执行器等，尽力收缩绕过空间。
-# Day 18 (H7) 加固：python -c / powershell -Command / cmd /c 嵌套
-# 执行器也被模型滥用，必须拦截。`for ... do ... & done` 后台并行删除
-# 也是常见绕过，需一并拦截。
-BLOCKED_PATTERNS = [
-    # ── rm 递归删除：覆盖 -rf/-fr/-r -f/--recursive 参数变体 + 根/家目录/敏感绝对路径 ──
-    r"\brm\b[^\n|&;]*?(?:-\w*[rR]+\w*|--recursive)[^\n|&;]*?[\s\'\"\"]+(/|~|\$\{?HOME\}?)",
-    # ── Windows 递归/强制删除 ──
-    r"\bRemove-Item\b[^|\n]*-(Recurse|Force|r)\b.*-Force\b",   # PowerShell 递归强制
-    r"\brd\s+/[sq]\b",                                        # rd /s /q
-    r"\bdel\s+/[sqf]\b",                                      # del /s /q /f
-    # ── 危险单条命令 / 格式化 / 写设备 ──
-    r"\bformat\s+[a-z]:",         # format C:
-    r"\bmkfs",                    # mkfs*
-    r"\bdd\s+if=.*of=/dev/",      # dd 写设备
-    r">\s*/dev/sd",               # 覆盖磁盘设备
-    r"\btruncate\s+-s\s+0\s+/",   # truncate 设备
-    # ── fork bomb / 关机 / 分区 / 权限破坏 ──
-    r":\(\).*\{\s*:\|:",          # fork bomb
-    r"\bshutdown\b",              # shutdown
-    r"\breboot\b",                # reboot
-    r"\bhalt\b",                  # halt
-    r"\bpoweroff\b",              # poweroff
-    r"\bfdisk\b",                 # fdisk
-    r"\bparted\b",                # parted
-    r"\bchmod\s+-R\s+0",          # chmod -R 000
-    r"\bDISM\b",                  # DISM
-    r"\bmkfs\.",                  # mkfs.ext4 等
-    # ── 远程下载并执行（curl|wget ... | sh/bash / xargs sh）──
-    r"\b(curl|wget)\b[^|\n]*\|\s*(sh|bash|zsh|cmd|powershell)\b",
-    r"\bxargs\b[^|\n]*\s(sh|bash|zsh)\b",
-    # ── Day 18 (H7)：拦截嵌套执行器 + 后台并行删除 ──
-    r"\bpython[0-9.]*\s+-c\b[^|\n]*\b(os\.system|subprocess|Popen|__import__|exec|eval)\b",
-    r"\bpython[0-9.]*\s+-c\b[^|\n]*['\"]([^'\"]*\brm\b|.*\bshutdown\b|.*\bmkfs\b|.*\bformat\b)",
-    r"\bnode\s+(-e|--eval)\b",                              # node eval
-    r"\bruby\s+-e\b",                                       # ruby eval
-    r"\bperl\s+-e\b",                                       # perl eval
-    r"\b(powershell|pwsh)\s+(-Command|-C|-EncodedCommand|-E)\b",
-    r"\bcmd\s*\.?exe?\s+/c\b",                              # cmd /c
-    # for/do/done 并行删除（多线程 rm 一个目录）—— 模型常用于"加速"清理
-    r"\bfor\b[^\n]*?\bdo\b[^\n]*?\brm\b[^\n]*?\&\s*(done|$)",
-    r"\bwhile\b[^\n]*?\bdo\b[^\n]*?\brm\b",
-    # xargs -P 并行执行 rm
-    r"\bxargs\b[^\n]*-P[^\n]*\brm\b",
-]
-_BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
+# ── 破坏性命令黑名单：与 ssh_runner / code_runner 共用同一份 ──
+# Day 20.6.12：原先本文件内联维护这份黑名单，ssh_runner 又另抄了一份并注释
+# 「与 shell_runner 保持一致」（实际缺 Day 18 的全部加固）。现已抽到
+# plugins/_cmd_blocklist.py 作为单一事实来源，两边 import 同一对象，
+# 从结构上消除再次漂移的可能。漏点清单、设计立场与误伤红线见该模块。
+from plugins._cmd_blocklist import (      # noqa: E402
+    BLOCKED_PATTERNS,
+    refuse_if_blocked as _refuse_if_blocked,
+)
 
 OUTPUT_LIMIT = 6000  # 输出截断上限（字符）
 
@@ -114,15 +75,6 @@ def _safe_script_path(filename):
     if candidate != root_real and not candidate.startswith(root_real + os.sep):
         raise ValueError(f"脚本路径越界，禁止执行工作区之外的文件: {filename}")
     return candidate
-
-
-def _refuse_if_blocked(command):
-    for r in _BLOCKED_RE:
-        if r.search(command or ""):
-            return ("⛔ 出于安全考虑，该命令被拒绝执行（命中破坏性操作黑名单：%s）。"
-                    "如需执行，请改用更安全的等价写法，或联系管理员调整策略。"
-                    % r.pattern)
-    return None
 
 
 def _run(cmd_args, cwd, timeout, shell=False):
@@ -171,6 +123,12 @@ def _do_python(args):
     code = args.get("code", "")
     if not code:
         return "错误: 未提供 code"
+    # Day 20.6.12（P0-SEC-2）：此前只有 run_command 走黑名单，run_python 零检查，
+    # 而 Python 代码同样能 os.system("rm -rf /")。现对代码文本一并筛查。
+    # 注意这是「尽力而为」的护栏而非沙箱（立场见 _cmd_blocklist）。
+    refuse = _refuse_if_blocked(code)
+    if refuse:
+        return refuse
     timeout = int(args.get("timeout", 30))
     root = _workspace_root()
     # 写到 workspace 临时文件再执行，避免 -c 的引号转义问题
