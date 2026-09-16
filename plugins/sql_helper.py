@@ -149,6 +149,35 @@ def _save_cfg():
         print(f"[sql_helper] 连接配置写盘失败: {e}")
 
 
+def _safe_sqlite_path(path):
+    """把 SQLite 文件路径约束在 workspace 内（Day 20.6.12，P0-SEC-6）
+
+    修复前：`sqlite3.connect(cfg.get("path"))` 无任何路径约束，而 sqlite3
+    对**不存在的路径会直接创建文件** —— 即 LLM 可用
+    `db_connect(type=sqlite, path=<任意位置>)` 在工作区之外落地数据库文件。
+
+    规则与 write_file._safe_path 对齐：
+      · `:memory:` 特例放行（本来就不落盘）
+      · 相对路径 → 归到 workspace 根目录下
+      · 绝对路径 → 必须位于 workspace 之内，否则 ValueError
+    """
+    if not path or path == ":memory:":
+        return ":memory:"
+    try:
+        from qwen_app.workspace import resolve_workspace
+        root = resolve_workspace()
+    except Exception:
+        root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    root = os.path.abspath(root)
+    root_real = os.path.realpath(root)
+
+    candidate = os.path.realpath(os.path.join(root, path))
+    if candidate != root_real and not candidate.startswith(root_real + os.sep):
+        raise ValueError(
+            f"数据库路径越界，禁止在对话工作目录之外创建或打开 SQLite 文件: {path}")
+    return candidate
+
+
 def _connect(cfg):
     """根据配置建立连接，返回 (conn, err)"""
     db_type = (cfg.get("type") or "sqlite").lower()
@@ -164,7 +193,10 @@ def _connect(cfg):
     try:
         if db_type == "sqlite":
             import sqlite3
-            path = cfg.get("path") or ":memory:"
+            try:
+                path = _safe_sqlite_path(cfg.get("path") or ":memory:")
+            except ValueError as e:
+                return None, str(e)
             conn = sqlite3.connect(path, timeout=QUERY_TIMEOUT)
             conn.row_factory = sqlite3.Row
             return conn, None
