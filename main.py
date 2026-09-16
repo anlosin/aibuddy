@@ -33,6 +33,95 @@ warnings.filterwarnings("ignore", message=".*invalid escape sequence.*")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="jieba.*")
 
 
+# ── Day 20.6.13 打包支持：下面两步必须**先于**任何其他 qwen_app 导入 ──
+from qwen_app import paths
+
+
+class _NullStream:
+    """日志文件也打不开时的最终兜底（吞掉所有输出，绝不抛异常）。"""
+
+    encoding = "utf-8"
+
+    def write(self, _s):
+        return 0
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+    def writable(self):
+        return True
+
+
+class _Tee:
+    """把写入同时送给多个流（跳过 None 与写入失败的流），保证「原来能看到的
+    还能看到，日志也一定留档」。"""
+
+    encoding = "utf-8"
+
+    def __init__(self, *streams):
+        self._streams = [s for s in streams if s is not None]
+
+    def write(self, s):
+        for st in self._streams:
+            try:
+                st.write(s)
+            except Exception:
+                pass
+        return len(s) if isinstance(s, str) else 0
+
+    def flush(self):
+        for st in self._streams:
+            try:
+                st.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        return False
+
+    def writable(self):
+        return True
+
+
+def _install_stream_guard():
+    """打包后把 stdout/stderr 同时接到 ``<可写数据目录>/logs/app.log``。
+
+    两个必须处理的现实：
+      1. ``--noconsole`` 下 ``sys.stdout`` **可能为 None**，任何 ``print`` 都会
+         抛 ``AttributeError: 'NoneType' object has no attribute 'write'`` —— 本项目
+         print 遍布各模块，足以让程序在启动路径上直接崩；
+      2. 打包态没有控制台，出问题时用户和我们**都没有任何落点**可看。
+    所以打包态一律 tee 到日志文件（源码态完全不动，保持控制台原汁原味）。
+    """
+    if not paths.is_frozen():
+        return
+
+    sink = None
+    try:
+        os.makedirs(paths.log_dir(), exist_ok=True)
+        sink = open(os.path.join(paths.log_dir(), "app.log"), "a",
+                    encoding="utf-8", buffering=1)
+    except Exception:
+        sink = None
+    if sink is None:
+        sink = _NullStream()
+
+    sys.stdout = _Tee(sys.stdout, sink)
+    sys.stderr = _Tee(sys.stderr, sink)
+
+
+# 1) 打包态：把内嵌插件模板释放到 exe 同级 plugins/，让「用户可增删改 + 热重载」
+#    的设计在 exe 上依然成立。必须早于 plugin_manager 导入 —— 它的模块级
+#    PLUGINS_DIR 在导入那一刻就固化了插件目录。
+paths.ensure_external_plugins()
+
+# 2) 无控制台时兜住 stdout/stderr，必须赶在任何输出之前。
+_install_stream_guard()
+
+
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtQml import QQmlApplicationEngine
@@ -116,7 +205,8 @@ def run_qtquick(app):
         _KEEP_ALIVE["engine"] = engine
         _KEEP_ALIVE["bridge"] = bridge
 
-        qml_dir = os.path.join(os.path.dirname(__file__), "qwen_app", "qml")
+        # 只读资源目录：源码态=项目根；打包态=PyInstaller 的 _MEIPASS
+        qml_dir = os.path.join(paths.resource_dir(), "qwen_app", "qml")
         engine.addImportPath(qml_dir)
         engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
 
@@ -198,11 +288,103 @@ def _safe_migrate_api_keys():
         print(f"[main] API Key 迁移跳过（不影响启动）: {e}", file=sys.stderr, flush=True)
 
 
+def _run_selftest():
+    """打包环境自检（不启动 GUI）。用法：``qwen.exe --selftest``
+
+    打包产物最常见的「不完整」不是窗口出不来，而是某个**插件的第三方依赖**
+    没被 PyInstaller 收进来 —— 平时看不出来，等用户点到那个功能才 ImportError
+    （插件是动态加载的，静态分析扫不到，见 qwen_app/plugin_deps.py）。
+
+    这里把 spec 声明过的依赖逐个真实 import，再真加载一遍全部插件，并把结论
+    同时写到 stdout 与 ``<data>/logs/selftest.log``（--noconsole 下只有后者能看到）。
+
+    返回进程退出码：0 = 全通过。
+    """
+    import importlib
+
+    lines = []
+
+    def emit(s=""):
+        lines.append(s)
+        try:
+            print(s)
+        except Exception:
+            pass
+
+    ok = True
+    emit("=== qwen 打包自检 (--selftest) ===")
+    emit(f"frozen         = {paths.is_frozen()}")
+    emit(f"sys.executable = {sys.executable}")
+    emit(f"sys.stdout     = {'None' if sys.stdout is None else type(sys.stdout).__name__}")
+    emit(f"sys.stderr     = {'None' if sys.stderr is None else type(sys.stderr).__name__}")
+    emit(f"resource_dir   = {paths.resource_dir()}")
+    emit(f"app_dir        = {paths.app_dir()}")
+    emit(f"data_dir       = {paths.data_dir()}")
+    emit(f"plugins_dir    = {paths.plugins_dir()}")
+    emit(f"Main.qml 存在  = "
+         f"{os.path.isfile(os.path.join(paths.resource_dir(), 'qwen_app', 'qml', 'Main.qml'))}")
+    emit("")
+
+    emit("--- 插件依赖（AST 扫描插件源码 + 动态依赖）---")
+    try:
+        from qwen_app.plugin_deps import all_required_imports
+        required = all_required_imports()
+    except Exception as e:
+        required = []
+        ok = False
+        emit(f"  FAIL 无法生成依赖清单: {e}")
+    bad = []
+    for mod in required:
+        try:
+            importlib.import_module(mod)
+        except Exception as e:
+            bad.append(f"{mod}: {type(e).__name__}: {e}")
+    emit(f"  共 {len(required)} 个模块，失败 {len(bad)} 个")
+    for b in bad:
+        ok = False
+        emit(f"  FAIL  {b}")
+    emit("")
+
+    emit("--- 插件加载 ---")
+    try:
+        from qwen_app.plugin_manager import discover_plugins, get_enabled_tools, get_plugin_meta
+        from qwen_app.config import load_plugin_state
+
+        plugins, _infos = discover_plugins()
+        expected = set(get_plugin_meta(plugin_dir=paths.plugins_dir()))
+        failed = sorted(expected - set(plugins))
+        emit(f"  目录内插件 {len(expected)} 个，加载成功 {len(plugins)} 个")
+        if failed:
+            ok = False
+            emit(f"  加载失败: {failed}")
+        tools = get_enabled_tools(plugins, load_plugin_state())
+        emit(f"  启用工具数 = {len(tools)}")
+    except Exception as e:
+        ok = False
+        emit(f"  FAIL 插件加载异常: {type(e).__name__}: {e}")
+
+    emit("")
+    emit("RESULT: " + ("PASS" if ok else "FAIL"))
+
+    blob = "\n".join(lines) + "\n"
+    try:
+        os.makedirs(paths.log_dir(), exist_ok=True)
+        with open(os.path.join(paths.log_dir(), "selftest.log"), "w", encoding="utf-8") as fh:
+            fh.write(blob)
+    except Exception:
+        pass
+    return 0 if ok else 1
+
+
 def main():
     args = sys.argv[1:]
     force_pyqt5 = "--pyqt5" in args
     force_qtquick = "--qtquick" in args
     # 默认走 QtQuick
+
+    # 打包自检：不启动 GUI，直接跑完退出（见 _run_selftest docstring）
+    if "--selftest" in args:
+        sys.exit(_run_selftest())
 
     _set_qt_attributes()              # 必须在 QApplication 之前
     app = QApplication(sys.argv)

@@ -75,6 +75,15 @@ _tmp_*.txt
 # 可再生，不进仓库）。
 tests/artifacts/
 
+# ===== PyInstaller 构建产物 =====
+# 全部可由 qwen.spec 再生（构建命令见 spec 头部注释）。
+# qwen.spec 本身是构建配方，**必须**入库，不要一并忽略。
+build/
+dist/
+*.manifest
+warn-*.txt
+xref-*.html
+
 # ===== 个人运维脚本（含内网信息，公开仓库默认排除） =====
 *.sh
 

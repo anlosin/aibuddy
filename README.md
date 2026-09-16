@@ -66,16 +66,55 @@ python -m qwen_app.scheduler_run
 python -m qwen_app.scheduler_run --once
 ```
 
+## 打包为 Windows exe（免 Python 环境）
+
+```bash
+build_exe.bat
+# 等价于：
+#   pip install pyinstaller
+#   python -m PyInstaller qwen.spec --noconfirm
+```
+
+产物：`dist/qwen/qwen.exe`。分发时打包**整个 `dist/qwen` 文件夹**（onedir 形态）。
+
+首次运行会在 exe 同级自动生成：
+
+| 位置 | 说明 |
+| --- | --- |
+| `data/` | 配置、会话库、自动化任务、工作区、日志。**便携** —— 整个文件夹拷走即带走全部数据 |
+| `plugins/` | 插件目录，可自由增删改；替换 `.py` 后热重载生效 |
+
+若 exe 所在目录不可写（例如装在 `C:\Program Files\`），数据自动回退 `%APPDATA%\qwen`；
+也可用环境变量 `QWEN_DATA_DIR` 显式指定数据目录。
+
+自检打包是否**完整**（逐个真实 import 插件第三方依赖 + 加载全部插件）：
+
+```bash
+dist\qwen\qwen.exe --selftest
+type dist\qwen\data\logs\selftest.log
+```
+
+> 打包要点：插件由 `importlib` **动态加载**，PyInstaller 的静态分析看不到它们内部
+> 的第三方 `import`（如 `paramiko` / `pdfplumber` / `jieba`），漏一个就是「某个功能在 exe 里
+> ImportError」。因此依赖清单统一维护在 `qwen_app/plugin_deps.py`，由 `qwen.spec`
+> （打进包）与 `--selftest`（打包后校验）**共用同一份**，避免两边漂移。
+>
+> 路径也做了 frozen 适配（`qwen_app/paths.py`）：只读资源走 `_MEIPASS`，可写数据走
+> exe 同级 —— 否则数据会被写进解包临时目录，进程退出即丢。
+
 ## 目录结构
 
 - `main.py` — 入口启动器（项目根目录，导入 `qwen_app` 包）
 - `start.bat` — Windows 一键启动脚本
+- `build_exe.bat` / `qwen.spec` — Windows 打包脚本与 PyInstaller 配方
 - `model_config.example.json` — 配置模板（复制为 `data/model_config.json`）
 - `sp_*.txt` — 系统提示词模板（`sp_analyst` / `sp_developer` / `sp_general`）
 - `qwen_app/` — 核心应用包
   - `chat_window.py` — 主窗口与界面逻辑
   - `worker.py` — 对话与工具调用工作线程
   - `config.py` / `tools.py` — 配置、对话持久化与默认值
+  - `paths.py` — 统一路径解析（源码态 / 打包态；只读资源 vs 可写数据）
+  - `plugin_deps.py` — 插件第三方依赖清单（打包与自检共用的单一事实源）
   - `plugin_manager.py` — 插件发现与分发
   - `scheduler.py` / `scheduler_run.py` — 定时自动化核心与独立运行器
   - `expert_router.py` — 专家路由（声明式专家）
