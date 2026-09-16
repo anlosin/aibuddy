@@ -314,6 +314,30 @@ def resolve_automation_client(auto, parent_client, parent_model_id):
             f"{m.get('name', '')}({m.get('model_id', '')})", "")
 
 
+def _strip_think(text):
+    """剥离思考模型的 <think>/<thinking> 标签块（非流式等价于 worker.py 的解析）。
+
+    - 成对 <think>...</think> → 整块删除
+    - 未闭合的 <think> → 其后全部是思考没有正文，整段丢弃
+    """
+    if not text:
+        return text
+    for open_tag, close_tag in (("<think>", "</think>"),
+                                ("<thinking>", "</thinking>")):
+        # 先删所有成对块（可能多轮出现）
+        while open_tag in text and close_tag in text:
+            start = text.find(open_tag)
+            end = text.find(close_tag, start)
+            if end == -1:
+                break
+            text = text[:start] + text[end + len(close_tag):]
+        # 未闭合的：思考未结束 → 后面没有正文
+        pos = text.find(open_tag)
+        if pos != -1:
+            text = text[:pos]
+    return text.strip()
+
+
 def run_automation(auto, client, model_id, plugins, enabled_plugins,
                     enable_thinking, enable_tools, max_rounds):
     """无界面执行一个自动化任务，返回 (final_text, tool_logs, error)
@@ -384,6 +408,8 @@ def run_automation(auto, client, model_id, plugins, enabled_plugins,
             else:
                 final = content
                 break
+        # 思考模型（QwQ 等）非流式返回带 <think> 原文，执行记录里不该出现
+        final = _strip_think(final)
         if not final:
             final = "(模型未返回有效内容)"
     except Exception as e:
@@ -602,6 +628,17 @@ class Scheduler:
         auto["last_run"] = started.isoformat()
         auto["last_status"] = status
         auto["last_error"] = error
+        # Day 20.6.6 修复：check_due 传进来的 auto 是 deepcopy（防并发设计），
+        # 上面的 last_run 更新只落在副本上，self.automations 里的原对象永远
+        # 不变 → is_due 每 30s 都判定"到期" → 任务被无限重复执行
+        # （2026-09-15 晚 weather 任务 21:30~24:00 每 30s 刷了 300+ 次）。
+        # 必须把执行状态同步回原对象再存盘。run_now 传的是原对象本身，
+        # orig is auto 时跳过即可。
+        orig = next((a for a in self.automations if a.get("id") == aid), None)
+        if orig is not None and orig is not auto:
+            orig["last_run"] = auto["last_run"]
+            orig["last_status"] = status
+            orig["last_error"] = error
         # 写全文 md 日志
         ts = started.strftime("%Y%m%d_%H%M%S")
         md_path = os.path.join(LOG_DIR, f"{aid}_{ts}.md")
