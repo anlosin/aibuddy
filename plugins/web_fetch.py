@@ -19,7 +19,7 @@ from html.parser import HTMLParser
 PLUGIN_INFO = {
     "name": "web_fetch",
     "description": "读取指定网页的文本内容，自动提取正文、去除广告等干扰",
-    "version": "1.0",
+    "version": "1.1",
 }
 
 TOOLS = [
@@ -276,6 +276,56 @@ def _read_chunked(sock, initial=b""):
         buf = buf[size + 2:]
 
 
+_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
+
+
+def _fetch_follow_redirects(url, timeout=15, max_hops=5):
+    """跟随重定向（最多 max_hops 跳），**每一跳都重新走 _ip_safe_fetch 内的
+    SSRF 校验** —— 防止外网页面 302 跳内网的绕过。
+
+    返回 (final_url, status, headers, raw_bytes)。
+    """
+    for hop in range(max_hops + 1):
+        status, headers, body = _ip_safe_fetch(url, timeout)
+        if status not in _REDIRECT_STATUSES:
+            return url, status, headers, body
+        if hop >= max_hops:
+            break
+        loc = headers.get("location", "")
+        if not loc:
+            break
+        url = urllib.parse.urljoin(url, loc)
+    raise ConnectionError(f"重定向未完成（超 {max_hops} 跳或缺少 Location）")
+
+
+def _decode_body(raw, declared_charset):
+    """按 优先声明字符集 → meta 嗅探 → utf-8 → gbk/gb18030 解码。
+
+    国内大量站点是 GBK 且响应头不带 charset，之前直接 utf-8+replace 会
+    整页乱码。strict 解码失败才降级到下一候选，最后 utf-8+replace 兜底。
+    """
+    import re
+    candidates = []
+    if declared_charset:
+        candidates.append(declared_charset)
+    head = raw[:2048].decode("ascii", errors="ignore")
+    m = re.search(r'charset=["\']?([\w\-]+)', head, re.IGNORECASE)
+    if m:
+        candidates.append(m.group(1))
+    candidates += ["utf-8", "gbk", "gb18030"]
+    seen = set()
+    for enc in candidates:
+        enc = enc.strip().lower()
+        if not enc or enc in seen:
+            continue
+        seen.add(enc)
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def execute(name, arguments):
     if name != "fetch_webpage":
         return f"未知工具: {name}"
@@ -288,7 +338,8 @@ def execute(name, arguments):
         url = "https://" + url
 
     try:
-        status, headers, raw = _ip_safe_fetch(url)        # SSRF 防护：内部 _validate_and_resolve
+        # SSRF 防护：每跳内部 _validate_and_resolve；自动跟随重定向
+        final_url, status, headers, raw = _fetch_follow_redirects(url)
     except ValueError as e:
         return f"⛔ 安全拦截: {e}"
     except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
@@ -305,12 +356,12 @@ def execute(name, arguments):
     if "text/html" not in content_type and "text/plain" not in content_type:
         return f"不支持的内容类型: {content_type}"
 
-    # 尝试解码
+    # 解码：声明 charset → meta 嗅探 → utf-8 → gbk/gb18030
     charset = None
     for part in content_type.split(";"):
         if "charset" in part:
             charset = part.split("=")[-1].strip()
-    text = raw.decode(charset or "utf-8", errors="replace")
+    text = _decode_body(raw, charset)
 
     extractor = _TextExtractor()
     extractor.feed(text)
@@ -320,4 +371,4 @@ def execute(name, arguments):
     if len(body) > 8000:
         body = body[:8000] + "\n...[内容已截断，网页原文较长]"
 
-    return f"[{url}]\n\n{body}"
+    return f"[{final_url}]\n\n{body}"
