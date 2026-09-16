@@ -62,20 +62,28 @@ TOOLS = [
 
 
 def _safe_path(filepath):
-    """解析为安全路径：相对路径归到当前对话工作目录，绝对路径保持不变。
+    """解析为安全路径，并强制约束在对话工作目录内，防止路径穿越。
 
-    用 realpath 规范化（解析 ../、符号链接）并强制约束在对话工作目录内，
-    防止路径穿越。与 write_file 插件行为保持一致。
+    与 write_file._safe_path 行为**完全一致**：用 realpath 规范化（解析 ../、
+    符号链接、冗余分隔符），最终路径必须位于工作目录之下，否则抛 ValueError。
+
+    **相对路径与绝对路径一视同仁**：绝对路径经 os.path.join 会丢弃前缀，
+    规范化后必然落在根之外而被拒绝。这是刻意行为 —— 危害链是
+    web_fetch 抓网页 → 内容进上下文 → 提示注入 → 诱导 LLM 用绝对路径写文件。
+
+    Day 20.6.12 修复（audit_verification.md P0-SEC-3）：此前开头有
+    `if os.path.isabs(filepath): return filepath` 短路，使绝对路径直接放行、
+    绕过工作区边界；而 docstring 还宣称「与 write_file 一致」——实为说谎。
     """
-    if os.path.isabs(filepath):
-        return filepath
     root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     try:
         from qwen_app.workspace import resolve_workspace
         root = resolve_workspace()
     except Exception:
         pass
+    root = os.path.abspath(root)
     root_real = os.path.realpath(root)
+
     candidate = os.path.realpath(os.path.join(root, filepath))
     if candidate != root_real and not candidate.startswith(root_real + os.sep):
         raise ValueError(f"路径越界，禁止访问对话工作目录之外的位置: {filepath}")
@@ -146,8 +154,21 @@ def _create(args):
     else:
         doc.add_paragraph("（无内容）")
 
-    path = _safe_path(filename)
-    doc.save(path)
+    # 路径越界时优雅返回错误串（与 write_file 一致），不要把 ValueError 抛给调用方
+    try:
+        path = _safe_path(filename)
+    except ValueError as e:
+        return f"错误: {e}"
+
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    except OSError:
+        pass
+    try:
+        doc.save(path)
+    except Exception as e:
+        return f"错误: 保存文档失败 - {e}"
+
     return (
         f"Word 文档已创建: {filename}\n"
         f"路径: {os.path.abspath(path)}\n"

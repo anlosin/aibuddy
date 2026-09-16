@@ -36,29 +36,14 @@ TOOLS = [
 ]
 
 
-def _safe_path(filepath):
-    """解析为安全路径：相对路径归到当前对话工作目录，绝对路径保持不变。
-
-    用 realpath 规范化（解析 ../、符号链接）并强制约束在对话工作目录内，
-    防止路径穿越。与 write_file 插件行为保持一致。
-    """
-    if os.path.isabs(filepath):
-        return filepath
-    root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    try:
-        from qwen_app.workspace import resolve_workspace
-        root = resolve_workspace()
-    except Exception:
-        pass
-    root_real = os.path.realpath(root)
-    candidate = os.path.realpath(os.path.join(root, filepath))
-    if candidate != root_real and not candidate.startswith(root_real + os.sep):
-        raise ValueError(f"路径越界，禁止访问对话工作目录之外的位置: {filepath}")
-    return candidate
-
-
 def _resolve_read_path(filepath):
-    """读取用路径解析：相对路径先在当前对话工作目录查找，找不到回退项目根。"""
+    """读取用路径解析：相对路径先在当前对话工作目录查找，找不到回退项目根。
+
+    本插件**只读**（仅 read_pdf），读取有意允许绝对路径与回退项目根。
+    若将来新增写 PDF 的能力，写路径必须另用 workspace 根约束实现，
+    不要复用本函数（Day 20.6.12 已删除此处零调用的 `_safe_path` 死代码，
+    它当时带着 `isabs → 直接放行` 的越界短路，见 audit_verification.md P0-SEC-3/P0-SEC-9）。
+    """
     if os.path.isabs(filepath):
         return filepath
     ws = None
