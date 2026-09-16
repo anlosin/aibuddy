@@ -678,7 +678,10 @@ def _scan_plugins():
     names = []
     try:
         for f in sorted(os.listdir(base)):
-            if f.endswith(".py") and f not in ("__init__.py",):
+            # Day 20.6.12：下划线开头的是包内私有模块（__init__ / _secret_store /
+            # _cmd_blocklist），不是插件 —— 此前只排除 __init__.py，导致它们被
+            # 当成"默认启用的插件"出现在设置界面里（勾选无效，纯噪声）。
+            if f.endswith(".py") and not f.startswith("_"):
                 names.append(f[:-3])
     except Exception:
         pass

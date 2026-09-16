@@ -114,11 +114,19 @@ def discover_plugins(plugin_dir=None, reload_modules=False):
                 spec.loader.exec_module(mod)
                 if not hasattr(mod, "PLUGIN_INFO"):
                     continue
-                has_tool = hasattr(mod, "TOOLS") and hasattr(mod, "execute")
+                # Day 20.6.12：判定收紧为「真的有工具（TOOLS 非空）+ execute 可调用」。
+                # 原先用 hasattr 判定，纯技能插件（TOOLS = [] + execute = None）也会被
+                # 当成工具插件；更要紧的是「声明了 TOOLS 却没有 execute」的坏插件会被
+                # **静默丢弃**，用户只会觉得"插件神秘消失"。现在明确告警。
+                has_tool = (bool(getattr(mod, "TOOLS", None))
+                            and callable(getattr(mod, "execute", None)))
                 has_skill = hasattr(mod, "SYSTEM_PROMPT")
                 if has_tool or has_skill:
                     plugins[pname] = mod
                     infos[pname] = getattr(mod, "PLUGIN_INFO")
+                elif getattr(mod, "TOOLS", None):
+                    print(f"插件 {pname} 声明了 TOOLS 但没有可调用的 execute，已跳过"
+                          f"（请检查该插件实现）")
             except Exception as e:
                 print(f"加载插件 {pname} 失败: {e}")
     return plugins, infos
@@ -169,13 +177,32 @@ def get_enabled_tools(plugins, enabled_names):
 
 
 def dispatch_tool(plugins, enabled_names, tool_name, arguments):
-    """将工具调用分派到对应的已启用插件"""
+    """将工具调用分派到对应的已启用插件
+
+    Day 20.6.12 加固：
+      · 插件 execute 抛出的异常一律**兜底为可读错误串**返回给模型，不再
+        打穿到 worker / scheduler 的对话循环（此前 docx/excel/pptx 的 _create
+        在未捕获时传越界路径，ValueError 会直接冒到对话线程，用户只看到
+        「对话失败」）。兜底同时写 stderr，保留排查线索。
+      · 声明了工具却没有可调用 execute 的插件，返回明确错误而不是 AttributeError。
+    """
     for name in enabled_names:
         mod = plugins.get(name)
         if mod:
             own_names = [t["function"]["name"] for t in getattr(mod, "TOOLS", [])]
             if tool_name in own_names:
-                return getattr(mod, "execute")(tool_name, arguments)
+                fn = getattr(mod, "execute", None)
+                if not callable(fn):
+                    return (f"错误: 插件 [{name}] 声明了工具 {tool_name}，"
+                            f"但没有可调用的 execute")
+                try:
+                    return fn(tool_name, arguments)
+                except Exception as e:          # noqa: BLE001 — 兜底必须抓全部
+                    import traceback
+                    print(f"[plugin_manager] 工具 {tool_name}（插件 {name}）执行异常: {e}",
+                          file=sys.stderr, flush=True)
+                    traceback.print_exc()
+                    return f"工具 {tool_name} 执行失败: {type(e).__name__}: {e}"
     return f"未知工具: {tool_name}"
 
 

@@ -10,7 +10,9 @@ def _scan_plugins():
     names = []
     try:
         for f in sorted(os.listdir(base)):
-            if f.endswith(".py") and f not in ("__init__.py",):
+            # Day 20.6.12：排除下划线开头的包内私有模块（__init__ / _secret_store /
+            # _cmd_blocklist），它们不是插件，不应出现在启用列表里。
+            if f.endswith(".py") and not f.startswith("_"):
                 names.append(f[:-3])
     except Exception:
         pass
