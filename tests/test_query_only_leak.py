@@ -75,7 +75,12 @@ class TestQueryOnlyLeak(unittest.TestCase):
         修复后：第二次 INSERT 真的把数据写进去，第三次 SELECT 能看到。
         """
         from plugins import sql_helper
+        from qwen_app.workspace import set_active_workspace, clear_active_workspace
+        # Day 20.6.12 (P0-SEC-6)：sqlite 路径被约束在 workspace 内。本测试关注
+        # query_only 状态泄漏，与路径策略无关；把临时目录设为「活跃工作目录」，
+        # 使 tmpdir 下的 db 合法（不依赖固定 workspace 位置，保持隔离与可清理）。
         tmpdir = tempfile.mkdtemp()
+        set_active_workspace(tmpdir)
         db_path = os.path.join(tmpdir, "test.db")
         try:
             conn = sqlite3.connect(db_path)
@@ -122,20 +127,25 @@ class TestQueryOnlyLeak(unittest.TestCase):
                           f"SELECT 应见刚 INSERT 的 2（修复前会丢），实际：{r3!r}")
 
         finally:
-            # 清理：关闭缓存连接 + 删 tmpdir
+            # 清理：关闭缓存连接 + 还原活跃工作目录 + 删 tmpdir
             try:
                 cn, _ = sql_helper._get_conn("test_db_qol")
                 if cn:
                     cn.close()
             except Exception:
                 pass
+            clear_active_workspace()
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_sql_helper_alternating_read_only_mode(self):
         """Day 19.1.1: 反复切换 read_only=True/False 不应出现状态污染。"""
         from plugins import sql_helper
+        from qwen_app.workspace import set_active_workspace, clear_active_workspace
+        # Day 20.6.12 (P0-SEC-6)：同 test_sql_helper_read_only_false_resets_query_only，
+        # 把临时目录设为活跃工作目录，使 db 路径满足 workspace 约束。
         tmpdir = tempfile.mkdtemp()
+        set_active_workspace(tmpdir)
         db_path = os.path.join(tmpdir, "test.db")
         try:
             conn = sqlite3.connect(db_path)
@@ -184,6 +194,7 @@ class TestQueryOnlyLeak(unittest.TestCase):
                     cn.close()
             except Exception:
                 pass
+            clear_active_workspace()
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
 
