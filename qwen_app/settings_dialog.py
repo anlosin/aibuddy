@@ -95,8 +95,14 @@ def _model_edit_form(window, dlg, model=None):
 
     返回 (form_widget, get_values_fn)；get_values() 校验并返回字段字典，
     校验失败弹提示并返回 None。
+
+    注意：enable_thinking / enable_tools 是**全局偏好**，由「偏好设置」对话框
+    统一管理（见 show_settings）。此处刻意不提供每模型开关 —— 早前版本提供了
+    这两个复选框，但 switch_model() 从不读取模型的该字段（切换模型时反而会
+    把它们 pop 掉），导致「编辑当前模型」会静默覆盖用户的全局偏好。现按全局
+    偏好语义统一移除，避免死 UI 与误导。
     """
-    from PyQt5.QtWidgets import QFormLayout, QLineEdit, QCheckBox, QWidget
+    from PyQt5.QtWidgets import QFormLayout, QLineEdit, QLabel, QWidget
 
     form = QWidget(dlg)
     fl = QFormLayout(form)
@@ -114,18 +120,17 @@ def _model_edit_form(window, dlg, model=None):
     le_model.setPlaceholderText("qwen-max / gpt-4o / DeepSeek-R1-...")
     le_proxy = QLineEdit(m.get("proxy", ""))
     le_proxy.setPlaceholderText("http://127.0.0.1:7890（留空=直连）")
-    chk_think = QCheckBox("启用思考模式 (enable_thinking)")
-    chk_think.setChecked(bool(m.get("enable_thinking", False)))
-    chk_tools = QCheckBox("启用工具调用 (enable_tools)")
-    chk_tools.setChecked(bool(m.get("enable_tools", True)))
+    hint = QLabel("思考模式 / 工具调用为全局偏好，请在「菜单→偏好设置」中调整，"
+                  "不随单条模型保存。")
+    hint.setStyleSheet("color:#8A8F99;")
+    hint.setWordWrap(True)
 
     fl.addRow("名称:", le_name)
     fl.addRow("Base URL:", le_url)
     fl.addRow("API Key:", le_key)
     fl.addRow("模型 ID:", le_model)
     fl.addRow("代理:", le_proxy)
-    fl.addRow("", chk_think)
-    fl.addRow("", chk_tools)
+    fl.addRow(hint)
 
     def get_values():
         name = le_name.text().strip()
@@ -136,11 +141,10 @@ def _model_edit_form(window, dlg, model=None):
         if not url or not mid:
             QMessageBox.warning(dlg, "提示", "Base URL 和 模型ID 不能为空")
             return None
+        # 不含 enable_thinking / enable_tools —— 属全局偏好，见函数 docstring
         return {
             "name": name or mid,
             "base_url": url, "api_key": key, "model_id": mid, "proxy": proxy,
-            "enable_thinking": chk_think.isChecked(),
-            "enable_tools": chk_tools.isChecked(),
         }
 
     return form, get_values
@@ -325,13 +329,16 @@ def show_model_manager(window):
 
 
 def _apply_to_window(window, model):
-    """把模型字段同步到 window 激活字段并重建 client（编辑/删除当前模型时）"""
+    """把模型字段同步到 window 激活字段并重建 client（编辑/删除当前模型时）。
+
+    只同步「连接字段」（URL/Key/Model/Proxy）。enable_thinking / enable_tools
+    是全局偏好，**不**由模型覆盖 —— 早前版本在此处写入这两个开关，会把用户的
+    全局偏好静默改成该模型的残留值，已移除。
+    """
     window.base_url = model.get("base_url", "")
     window.api_key = model.get("api_key", "")
     window.model_id = model.get("model_id", "")
     window.proxy = model.get("proxy", "")
-    window.enable_thinking = bool(model.get("enable_thinking", False))
-    window.enable_tools = bool(model.get("enable_tools", True))
     window.setup_client()
     window._save_settings()
 
