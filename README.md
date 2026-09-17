@@ -77,6 +77,14 @@ build_exe.bat
 
 产物：`dist/qwen/qwen.exe`。分发时打包**整个 `dist/qwen` 文件夹**（onedir 形态）。
 
+> ⚠️ **只运行 `dist\qwen\qwen.exe`。**
+> 构建过程中 PyInstaller 还会在 `build\qwen\` 里留下一个同名 `qwen.exe`，那是
+> bootloader 的**半成品**，旁边没有 `_internal\`，双击必然报
+> `Failed to load Python DLL ...\build\qwen\_internal\python313.dll`。
+> **看报错里的路径前缀即可判定**：写着 `build\` 就是点错了文件，包本身没问题。
+> `build\` 只是构建缓存（可随时整个删掉），`build_exe.bat` 现在会在构建后
+> 自动删除那个半成品。
+
 首次运行会在 exe 同级自动生成：
 
 | 位置 | 说明 |
