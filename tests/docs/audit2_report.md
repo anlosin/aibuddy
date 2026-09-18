@@ -115,6 +115,12 @@
 - **问题**：当 `resolve_workspace()` 失败时回退到 `__file__`-based 根——打包态会回退到 `_MEIPASS` 父目录。
 - **评级**：与 P1-AUD2-1 同型；`resolve_workspace()` 在 QtQuick 主路径**应正常返回 active workspace**，所以 fallback 实际触发概率低。
 
+> **⭐ Day 20.6.17 实证修订（推翻上述 P1-AUD2-1/2 定级）**：
+> 逐条读源码核实后，本节原评级**过重**——
+> 1. `resolve_workspace()`（qwen_app/workspace.py:121-135）内部三层全兜底（getattr 无抛点、makedirs try/except pass），**永不抛异常**；`from qwen_app...` 绝对导入在源码态与打包态均恒成功（打包态 qwen_app 在 PYZ，selftest 52 工具已证明）。故 8 处 `_root`/`proj_root` 的 `except` 分支**理论不可达** → 降级 **P3（死防御代码）**。
+> 2. 即使极端场景触发，打包态落点是 `<exe目录>`（外部插件 `..`），不是 _MEIPASS，**不会丢数据**，仅文件错位；pdf.py 为只读候选，几乎零后果。
+> 3. **真正唯一的 P1 是 `knowledge_base.py:143`**——它不是 fallback，是相对 folder 的**常规解析路径**，打包态每次 `kb_build(folder='.')` 都遍历整个 exe 目录（触发概率 100%）。已在 commit `a54798d` 修复：相对 folder 工作区优先、`paths.app_dir()` 兜底，护栏 `tests/test_day20_6_17_kb_base.py`（5 项）。
+
 ### P1-AUD2-3 plugin_deps AST 扫描对**包相对导入**全部跳过
 - **位置**：`qwen_app/plugin_deps.py:60-62`
 - **问题**：`if node.level: continue` 滤掉 `from . import x` —— 但当前所有插件都用 `__package__==''` 加载，相对导入必失败，所以这条「当前合法」。
