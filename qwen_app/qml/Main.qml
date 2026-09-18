@@ -617,6 +617,20 @@ ApplicationWindow {
             toastBox.msg = msg
             toastTimer.restart()
         }
+        // Day 20.6.15: 专家变化（下拉切换 / /dev 前缀路由）→ 重拉列表并
+        // 显式回写 currentIndex。⚠️ 只重拉 model 不够：currentIndex 的绑定
+        // 依赖 bridge.list_experts()，而 bridge 没有对应的 NOTIFY 属性，
+        // 绑定不会重估 —— 不回写就永远高亮旧项。
+        function onExpertChanged(eid) {
+            expertCombo.model = bridge ? bridge.list_experts() : []
+            var es = expertCombo.model
+            for (var i = 0; i < es.length; i++) {
+                if (es[i].current) {
+                    expertCombo.currentIndex = i
+                    return
+                }
+            }
+        }
     }
 
     // ============ Day 12: 全局快捷键 ============
@@ -1037,6 +1051,44 @@ ApplicationWindow {
                                 if (currentIndex >= 0 && currentIndex < ms.length) {
                                     bridge.set_current_model(ms[currentIndex].id)
                                 }
+                            }
+                        }
+                        // Day 20.6.15: 专家下拉 —— 此前「专家」只有 PyQt5 备用窗口
+                        // (chat_window) 有，QtQuick 主界面从未露出过（打包 exe 默认
+                        // 走 QtQuick，用户因此「专家没有了」）。数据源
+                        // bridge.list_experts()；/dev 前缀路由切换后经
+                        // expertChanged 信号同步（见下方 Connections）。
+                        ComboBox {
+                            id: expertCombo
+                            objectName: "expertCombo"
+                            Layout.preferredHeight: 32
+                            Layout.preferredWidth: 150
+                            model: bridge ? bridge.list_experts() : []
+                            textRole: "name"
+                            currentIndex: {
+                                if (!bridge) return -1
+                                const es = bridge.list_experts()
+                                for (let i = 0; i < es.length; i++) {
+                                    if (es[i].current) return i
+                                }
+                                return es.length > 0 ? 0 : -1
+                            }
+                            onActivated: {
+                                if (!bridge) return
+                                const es = bridge.list_experts()
+                                if (currentIndex >= 0 && currentIndex < es.length) {
+                                    bridge.set_expert(es[currentIndex].id)
+                                }
+                            }
+                            // 悬停显示当前专家的职责说明
+                            ToolTip.delay: 500
+                            ToolTip.visible: hovered
+                            ToolTip.text: {
+                                const es = bridge ? bridge.list_experts() : []
+                                for (let i = 0; i < es.length; i++) {
+                                    if (es[i].current) return es[i].description || es[i].name
+                                }
+                                return ""
                             }
                         }
                         // Day 14: 工具调用进度 chip（橙色脉冲）

@@ -46,7 +46,10 @@ class SendMixin(object):
             experts = _cfg.load_experts() if hasattr(_cfg, "load_experts") else self._load_experts()
             matched_id, stripped = match_expert(text, experts)
             if matched_id:
-                self._current_expert_id = matched_id
+                # Day 20.6.15: 走统一入口 _apply_expert（持久化 + emit
+                # expertChanged）—— 此前只改 in-memory，用 /dev 切的专家
+                # 重启即丢，QML 下拉框也不知道要跟着跳。
+                self._apply_expert(matched_id)
                 if stripped:
                     text = stripped
         except Exception:
@@ -207,7 +210,8 @@ class SendMixin(object):
             experts = self._load_experts()
             matched_id, stripped = match_expert(text, experts)
             if matched_id:
-                self._current_expert_id = matched_id
+                # Day 20.6.15: 同 send_message —— 统一入口，持久化 + emit
+                self._apply_expert(matched_id)
                 if stripped:
                     text = stripped
         except Exception:

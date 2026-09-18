@@ -364,6 +364,27 @@ def _run_selftest():
         emit(f"  FAIL 插件加载异常: {type(e).__name__}: {e}")
 
     emit("")
+    emit("--- 专家声明 ---")
+    # Day 20.6.15: experts/*.json 也是「动态按目录扫描」的资源，同样存在
+    # 「没随包发布 → 界面上专家凭空消失」的风险（打包后用户报过一次）。
+    try:
+        from qwen_app.expert_router import EXPERTS_DIR, load_experts
+        emit(f"  EXPERTS_DIR = {EXPERTS_DIR}")
+        _exps = load_experts()
+        if not _exps:
+            ok = False
+            emit("  FAIL 专家列表为空（experts/*.json 未随包发布？）")
+        else:
+            for _eid, _e in _exps.items():
+                emit(f"  OK    {_eid}: {_e.get('name', '')}")
+            if "general" not in _exps:
+                ok = False
+                emit("  FAIL 缺少兜底专家 general")
+    except Exception as e:
+        ok = False
+        emit(f"  FAIL 专家加载异常: {type(e).__name__}: {e}")
+
+    emit("")
     emit("RESULT: " + ("PASS" if ok else "FAIL"))
 
     blob = "\n".join(lines) + "\n"

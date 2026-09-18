@@ -86,17 +86,41 @@ class ModelMixin(object):
             "enable_tools": getattr(self, "_enable_tools", True),
         }
 
+    def _apply_expert(self, expert_id: str) -> bool:
+        """Day 20.6.15: 专家切换的**统一入口**（选中态三件套）：
+
+        1. in-memory（self._current_expert_id，本次对话立即生效）
+        2. 持久化（cfg["current_expert"]，与 chat_window._save_current_expert
+           共用同一个键 —— 重启后 / PyQt5 备用窗口读到的是同一个值）
+        3. emit expertChanged（QML 专家下拉框跟随，覆盖 /dev 前缀路由场景：
+           用户没碰下拉框但当前专家变了，UI 必须同步）
+
+        此前 set_expert 只做第 1 件 —— 切换不落盘、QML 也收不到通知。
+        """
+        experts = self._load_experts()
+        if expert_id not in experts:
+            return False
+        self._current_expert_id = expert_id
+        try:
+            cfg = _config.load_config()
+            cfg["current_expert"] = expert_id
+            _config.save_config(cfg)
+        except Exception as e:
+            print(f"[chat_bridge] 持久化 current_expert 失败: {e}")
+        try:
+            self.expertChanged.emit(expert_id)
+        except Exception:
+            pass
+        return True
+
     @pyqtSlot(str, result=bool)
     def set_expert(self, expert_id: str) -> bool:
         """Day 19 (C-NEW-3 修复): 切到指定专家。成功返回 True。
 
         QML 端下拉框选专家时调此 slot；/dev 前缀路由也会调。
+        Day 20.6.15: 改走 _apply_expert —— 补持久化 + expertChanged 信号。
         """
-        experts = self._load_experts()
-        if expert_id in experts:
-            self._current_expert_id = expert_id
-            return True
-        return False
+        return self._apply_expert(expert_id)
 
     @pyqtSlot(result='QVariantList')
     def list_experts(self):

@@ -54,6 +54,7 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
     sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
     sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
     currentModelNameChanged = pyqtSignal(str)                   # Day 10: 切换模型名名发生变化
+    expertChanged = pyqtSignal(str)                             # Day 20.6.15: 当前专家变化（下拉切换 / /dev 前缀路由），QML 下拉框跟随
     # Day 11: 工具调用（Day 19.1 修订：toolCallResult 3 参数触发 QTBUG-94360
     # 栈越界 —— QML Connections 监听 ≥3 参数信号会在启动期随机 0xC0000005。
     # 改为 2 参数 + QVariantMap 负载，与 messageAdded 同模板）
@@ -151,8 +152,17 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
             self._enable_thinking = False
             self._enable_tools = True
         # Day 19 (C-NEW-3 修复): 当前激活的专家（默认 "general"）。
-        # 用户在 QML 端通过 set_expert 切换；/dev 前缀路由会临时改
+        # 用户在 QML 端通过 set_expert 切换；/dev 前缀路由会临时改。
+        # Day 20.6.15: 从 cfg 读持久化值（与 chat_window._load_current_expert
+        # 共用 "current_expert" 键），并校验存在性 —— 残留的失效 id 会让
+        # QML 专家下拉框永远高亮不到任何项。
         self._current_expert_id = "general"
+        try:
+            _saved_expert = _cfg_full.get("current_expert", "general")
+            if _saved_expert and _saved_expert in self._load_experts():
+                self._current_expert_id = _saved_expert
+        except Exception:
+            pass
         # Day 14: 插件热更新 watcher
         self._plugin_watcher = None
         # Day 8: 当前会话 ID（main.py 启动日志读这个）
