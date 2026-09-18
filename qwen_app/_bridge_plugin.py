@@ -15,12 +15,21 @@ class PluginMixin(object):
     """插件相关方法：watcher 生命周期 + 发现 / 重载 / 已启用名单。"""
 
     def _init_plugin_watcher(self):
-        """Day 14: 监听 plugins 目录变化"""
+        """Day 14: 监听 plugins 目录变化。
+
+        Day 20.6.16 (P0-AUD2-7)：必须监视 ``external_plugins_dir()``（用户能改的那份），
+        而不是模块级常量 ``PLUGINS_DIR`` —— 后者在 plugin_manager 导入时一次性
+        计算成 ``builtin`` 或 ``external`` 中之一。打包态首启动外部 plugins 不存在
+        时 PLUGINS_DIR == builtin；随后 ensure_external_plugins() 把模板复制到
+        exe 同级，但 watcher 已冻在 builtin → 用户改 exe 同级插件收不到信号，
+        热重载失效。external_plugins_dir() 是**函数**，永远指向用户能改的目录。
+        """
         try:
-            from .plugin_manager import PLUGINS_DIR
-            if not os.path.isdir(PLUGINS_DIR):
+            from . import paths
+            ext = paths.external_plugins_dir()
+            if not os.path.isdir(ext):
                 return
-            self._plugin_watcher = QFileSystemWatcher([PLUGINS_DIR])
+            self._plugin_watcher = QFileSystemWatcher([ext])
             self._plugin_watcher.directoryChanged.connect(self._on_plugin_dir_changed)
         except Exception as e:
             print(f"[chat_bridge] 初始化 plugin watcher 失败: {e}")

@@ -10,9 +10,21 @@ PLUGIN_INFO = {
 }
 
 # ── 小说项目根目录 ──
-_NOVELS_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "data", "novels"
+# Day 20.6.16 (P0-AUD2-1)：本常量仅作为源码态兼容保底；运行时读写走
+# _novels_dir()，从 qwen_app.paths.data_dir() 求得（打包态=exe 同级 data/ 或
+# %APPDATA%\\qwen），**绝不会写到 _MEIPASS**。
+_NOVELS_DIR_LEGACY = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "novels"
 )
+
+
+def _novels_dir():
+    """小说项目根目录（运行时真实路径）"""
+    try:
+        from qwen_app import paths
+        return os.path.join(paths.data_dir(), "novels")
+    except Exception:
+        return _NOVELS_DIR_LEGACY
 
 # ── 系统提示词：引导 AI 成为专业小说家 ──
 SYSTEM_PROMPT = """你是一位荣获多项文学奖项的职业小说家，精通长篇/中篇/短篇小说创作。请始终遵循以下创作准则：
@@ -266,7 +278,7 @@ def _project_dir(title):
     safe = "".join(c for c in title if c.isalnum() or c in "._-")
     if not safe:
         safe = "untitled"
-    return os.path.join(_NOVELS_DIR, safe)
+    return os.path.join(_novels_dir(), safe)
 
 
 def _ensure_project(project):
@@ -608,12 +620,13 @@ def _load_novel(args):
 
 
 def _list_novels(args):
-    if not os.path.isdir(_NOVELS_DIR):
+    _ndir = _novels_dir()
+    if not os.path.isdir(_ndir):
         return "暂无小说项目（novels/ 目录不存在）"
 
     projects = []
-    for name in sorted(os.listdir(_NOVELS_DIR)):
-        pdir = os.path.join(_NOVELS_DIR, name)
+    for name in sorted(os.listdir(_ndir)):
+        pdir = os.path.join(_ndir, name)
         if not os.path.isdir(pdir):
             continue
         meta = _read_json(os.path.join(pdir, "meta.json"), {})

@@ -31,7 +31,22 @@ SYSTEM_PROMPT = """你拥有离线知识库检索能力（knowledge_base 插件�
 检索技巧：查询用关键词组合，而非完整问句；可分多次检索不同角度。
 """
 
-INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "knowledge_base", "index.json")
+INDEX_PATH_LEGACY = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "knowledge_base", "index.json",
+)
+# Day 20.6.16 (P0-AUD2-1)：上面这行只是源码态兼容保底；运行时读写走
+# _index_path() → qwen_app.paths.data_dir()，打包态=exe 同级 data/ 或 %APPDATA%\
+# qwen，**绝不写到 _MEIPASS**（与 ssh_runner CONN_FILE / sql_helper / novel_writer
+# 同型修复）。
+
+def _index_path():
+    """知识库索引文件真实路径（运行时）"""
+    try:
+        from qwen_app import paths
+        return os.path.join(paths.data_dir(), "knowledge_base", "index.json")
+    except Exception:
+        return INDEX_PATH_LEGACY
 
 TEXT_EXT = {".txt", ".md", ".py", ".json", ".csv", ".html", ".css", ".js", ".ts",
             ".xml", ".ini", ".yaml", ".yml", ".log", ".java", ".go", ".c", ".cpp",
@@ -178,8 +193,9 @@ def _do_build(args):
         "chunks": chunk_records,
         "has_jieba": _HAS_JIEBA,
     }
-    os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
-    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+    idx_path = _index_path()
+    os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+    with open(idx_path, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False)
     return (f"✅ 知识库构建完成\n来源: {base}\n"
             f"文件: {file_count} 个\n分块: {chunk_count} 个\n"
@@ -187,10 +203,11 @@ def _do_build(args):
 
 
 def _load_index():
-    if not os.path.exists(INDEX_PATH):
+    idx_path = _index_path()
+    if not os.path.exists(idx_path):
         return None
     try:
-        with open(INDEX_PATH, "r", encoding="utf-8") as f:
+        with open(idx_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None

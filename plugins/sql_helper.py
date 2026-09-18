@@ -33,7 +33,12 @@ SYSTEM_PROMPT = """你是一个资深数据库专家，精通 MySQL、PostgreSQL
 对于查询优化类问题，先分析现有 SQL 的执行计划预期瓶颈，再给出等价改写。
 对于建表/设计问题，给出规范化的表结构（包含字段类型、约束、注释）。"""
 
-CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "db_connections.json")
+CONN_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "db_connections.json"
+)
+# Day 20.6.16 (P0-AUD2-1)：上面这行只是源码态兼容保底；运行时读写走
+# _conn_file_path() → qwen_app.paths.data_dir()，打包态会落到 exe 同级 data/ 或
+# %APPDATA%\\qwen，**绝不会写到 _MEIPASS**。
 
 # 写操作关键字（只读模式下拦截）
 # 说明：旧版 WRITE_RE 只匹配行首关键字，可被前导注释(/* */、--、#)、CTE(WITH)
@@ -101,29 +106,51 @@ _CONN = {}
 _CFG = {}
 
 
-def _load_cfg():
+def _conn_file_path():
+    """连接配置真实落点 —— **运行时**才解析（避免打包态把数据写到 _MEIPASS）。
+
+    Day 20.6.16 (P0-AUD2-1)：模块顶层 CONN_FILE 是源码态兼容保底（开发用
+    python main.py 时需要正确解析）。运行时（无论源码还是打包态）走
+    qwen_app.paths.data_dir()，打包态会得到 exe 同级 data/（便携）或 %APPDATA%\
+    qwen（Program Files 下不可写时回退）。
+    """
+    try:
+        from qwen_app import paths
+        return os.path.join(paths.data_dir(), "db_connections.json")
+    except Exception:
+        return CONN_FILE
+
+
+def _load_cfg(path=None):
     global _CFG
     try:
-        if os.path.exists(CONN_FILE):
-            with open(CONN_FILE, "r", encoding="utf-8") as f:
-                _CFG = json.load(f)
+        f = path or _conn_file_path()
+        if os.path.exists(f):
+            with open(f, "r", encoding="utf-8") as fh:
+                _CFG = json.load(fh)
     except Exception:
         _CFG = {}
 
 
-def _save_cfg():
-    """持久化连接配置，剔除密码字段，避免明文落盘。
+def _save_cfg(path=None):
+    """持久化连接配置。
 
-    密码通过 _secret_store 加密保存到系统凭据库（Windows 凭据管理器 /
-    macOS Keychain / Linux Secret Service），重启后无需重输。如需修改
-    密码，重新调用 db_connect 即可覆盖。keyring 不可用时退到内存缓存
-    （仅本次会话有效）。
+    密码优先通过 _secret_store 加密保存到系统凭据库（Windows 凭据管理器 /
+    macOS Keychain / Linux Secret Service）；keyring 不可用时**降级把密码存
+    回磁盘**（明文），严格遵守项目「never lose user key」原则（与
+    config._sanitize_api_keys 同策略，详见 MEMORY.md）。此前把 password pop 后
+    只在 keyring 存在时调 set_secret，keyring 不可用时**密码永久丢失**。
+
+    Day 20.6.16 (P0-AUD2-4)：改用「降级存盘」而非「丢密码」。
 
     Day 20.6.12 修复：此前用 `from . import _secret_store` 相对导入，而插件由
     plugin_manager 以独立模块名加载（__package__ == ''），该导入**必然
     ImportError**，且被外层 `except Exception: pass` 吞掉 → **连 sanitized
     配置都不写盘**（db_connect 报成功、重启后连接消失）。改为绝对导入，
     失败时显式告警。
+
+    path 参数：默认 None → 走 _conn_file_path()（运行时解析，避开 _MEIPASS）；
+    测试可显式传 tmp 路径。
     """
     try:
         from plugins import _secret_store
@@ -136,14 +163,22 @@ def _save_cfg():
         if isinstance(cfg, dict):
             c = dict(cfg)
             pw = c.pop("password", None) or ""
-            # 密码另存到系统凭据库（同名覆盖）
             if pw and _secret_store:
-                _secret_store.set_secret("sql", name, pw)
+                try:
+                    _secret_store.set_secret("sql", name, pw)
+                except Exception as e:
+                    print(f"[sql_helper] keyring 写密码失败，回退存磁盘: {e}")
+                    c["password"] = pw          # 降级：明文存盘，绝不丢 Key
+            elif pw:
+                # keyring 不可用 → 密码不能丢；明文存盘
+                c["password"] = pw
             sanitized[name] = c
         else:
             sanitized[name] = cfg
     try:
-        with open(CONN_FILE, "w", encoding="utf-8") as f:
+        path = path or _conn_file_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
     except Exception as e:                # noqa: BLE001
         print(f"[sql_helper] 连接配置写盘失败: {e}")

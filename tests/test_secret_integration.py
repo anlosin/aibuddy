@@ -1,5 +1,10 @@
 """sql_helper / ssh_runner 集成测试：密码通过 keyring 保存，磁盘 cfg 不含明文。
 
+Day 20.6.16 (P0-AUD2-4)：keyring **不可用**时**降级把密码存回磁盘**（明文），
+严格遵守项目「never lose user key」原则（与 config._sanitize_api_keys 同策略）。
+所以 setUp/tearDown 在隔离 tmp 文件时改为传 _save_cfg(path=...) —— 不再
+patch CONN_FILE（CONN_FILE 已退化为源码态兼容常量；运行时走 _conn_file_path()）。
+
 不依赖真实 MySQL/SSH 服务器；只测"配置落盘"和"密码取回"逻辑。
 """
 import sys
@@ -14,35 +19,35 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class TestSqlHelperNoPasswordLeak(unittest.TestCase):
-    """sql_helper._save_cfg 落盘后不应包含明文密码"""
+    """sql_helper._save_cfg 落盘后不应包含明文密码（keyring 可用场景）"""
 
     def setUp(self):
         # 隔离每个测试的 _CFG 状态
         import plugins.sql_helper as sh
         sh._CFG = {}
-        # 把 CONN_FILE 指向临时文件，避免污染真实 data/
+        # 用 tmp 路径，避免污染真实 data/
         self.tmpdir = tempfile.mkdtemp()
         self.tmpfile = os.path.join(self.tmpdir, "sql_conns.json")
-        self._orig = sh.CONN_FILE
-        sh.CONN_FILE = self.tmpfile
         # 清掉可能残留的 keyring 条目
         import plugins._secret_store as ss
         ss.delete_secret("sql", "test_user1")
 
     def tearDown(self):
         import plugins.sql_helper as sh
-        sh.CONN_FILE = self._orig
+        sh._CFG = {}
         import plugins._secret_store as ss
         ss.delete_secret("sql", "test_user1")
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_1_disk_cfg_has_no_password(self):
-        """落盘 JSON 不应包含 password 字段"""
+        """落盘 JSON 不应包含 password 字段（keyring 可用场景）"""
         import plugins.sql_helper as sh
         sh._CFG["test_user1"] = {
             "type": "mysql", "host": "127.0.0.1", "port": 3306,
             "user": "root", "password": "mySecret123!",
         }
-        sh._save_cfg()
+        sh._save_cfg(path=self.tmpfile)
         # 读回磁盘
         with open(self.tmpfile, encoding="utf-8") as f:
             saved = json.load(f)
@@ -58,7 +63,7 @@ class TestSqlHelperNoPasswordLeak(unittest.TestCase):
             "type": "mysql", "host": "127.0.0.1", "port": 3306,
             "user": "root", "password": "mySecret123!",
         }
-        sh._save_cfg()
+        sh._save_cfg(path=self.tmpfile)
         # 从 keyring 验证
         import plugins._secret_store as ss
         got = ss.get_secret("sql", "test_user1")
@@ -68,9 +73,9 @@ class TestSqlHelperNoPasswordLeak(unittest.TestCase):
         """同名再次 set_secret 应覆盖旧密码"""
         import plugins.sql_helper as sh
         sh._CFG["test_user1"] = {"type": "mysql", "password": "old_pw"}
-        sh._save_cfg()
+        sh._save_cfg(path=self.tmpfile)
         sh._CFG["test_user1"]["password"] = "new_pw"
-        sh._save_cfg()
+        sh._save_cfg(path=self.tmpfile)
         import plugins._secret_store as ss
         self.assertEqual(ss.get_secret("sql", "test_user1"), "new_pw")
 
@@ -78,7 +83,7 @@ class TestSqlHelperNoPasswordLeak(unittest.TestCase):
         """_connect 应能从 keyring 取到密码（mock db driver 避免真实连接）"""
         import plugins.sql_helper as sh
         sh._CFG["test_user1"] = {"type": "mysql", "password": "from_keyring"}
-        sh._save_cfg()
+        sh._save_cfg(path=self.tmpfile)
         # 清掉 cfg 里的 password，模拟"只存了 keyring"的场景
         saved = {"type": "mysql", "host": "127.0.0.1", "port": 3306,
                  "user": "root", "name": "test_user1"}
@@ -94,25 +99,25 @@ class TestSqlHelperNoPasswordLeak(unittest.TestCase):
 
 
 class TestSshRunnerNoPasswordLeak(unittest.TestCase):
-    """ssh_runner._save_cfg 落盘后不应包含明文密码 / key_passphrase"""
+    """ssh_runner._save_cfg 落盘后不应包含明文密码 / key_passphrase（keyring 可用场景）"""
 
     def setUp(self):
         import plugins.ssh_runner as sr
         sr._CFG = {}
         self.tmpdir = tempfile.mkdtemp()
         self.tmpfile = os.path.join(self.tmpdir, "ssh_conns.json")
-        self._orig = sr.CONN_FILE
-        sr.CONN_FILE = self.tmpfile
         import plugins._secret_store as ss
         ss.delete_secret("ssh", "test_server")
         ss.delete_secret("ssh", "test_server#keypass")
 
     def tearDown(self):
         import plugins.ssh_runner as sr
-        sr.CONN_FILE = self._orig
+        sr._CFG = {}
         import plugins._secret_store as ss
         ss.delete_secret("ssh", "test_server")
         ss.delete_secret("ssh", "test_server#keypass")
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_5_disk_cfg_has_no_password(self):
         """落盘 JSON 不应包含 password 与 key_passphrase"""
@@ -123,7 +128,7 @@ class TestSshRunnerNoPasswordLeak(unittest.TestCase):
             "key_path": "/home/deploy/.ssh/id_rsa",
             "key_passphrase": "keyPass!",
         }
-        sr._save_cfg()
+        sr._save_cfg(path=self.tmpfile)
         with open(self.tmpfile, encoding="utf-8") as f:
             saved = json.load(f)
         self.assertNotIn("password", saved["test_server"])
@@ -136,7 +141,7 @@ class TestSshRunnerNoPasswordLeak(unittest.TestCase):
             "host": "1.2.3.4", "user": "deploy",
             "password": "sshSecret!", "key_passphrase": "keyPass!",
         }
-        sr._save_cfg()
+        sr._save_cfg(path=self.tmpfile)
         import plugins._secret_store as ss
         self.assertEqual(ss.get_secret("ssh", "test_server"), "sshSecret!")
         self.assertEqual(ss.get_secret("ssh", "test_server#keypass"), "keyPass!")
@@ -148,9 +153,9 @@ class TestSshRunnerNoPasswordLeak(unittest.TestCase):
             "host": "1.2.3.4", "port": 22, "user": "deploy", "name": "test_server",
             "password": "from_keyring_ssh",
         }
-        sr._save_cfg()
+        sr._save_cfg(path=self.tmpfile)
         # 模拟"重启": _load_cfg 从磁盘覆盖 _CFG（磁盘 cfg 不含 password 但含 name）
-        sr._load_cfg()
+        sr._load_cfg(path=self.tmpfile)
         with patch("paramiko.SSHClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client_cls.return_value = mock_client
@@ -160,6 +165,63 @@ class TestSshRunnerNoPasswordLeak(unittest.TestCase):
         connect_kwargs = mock_client.connect.call_args.kwargs
         self.assertEqual(connect_kwargs.get("password"), "from_keyring_ssh",
                          f"_get_client 未从 keyring 取密码: {connect_kwargs}")
+
+
+class TestKeyringUnavailableNeverLoseKey(unittest.TestCase):
+    """P0-AUD2-4：keyring 不可用时**降级把密码存回磁盘**（与 config 同策略）。
+
+    旧行为：keyring 不可用 → 密码既不在 keyring 也不在磁盘 → **永久丢失**。
+    新行为：keyring 不可用 → 密码**明文落盘**（用户机器只要它能跑起来，
+    就能用回之前的连接配置）。
+
+    实现：mock `plugins._secret_store.set_secret` 抛 RuntimeError，模拟真实
+    keyring backend 不可用（Windows 凭据管理器挂掉 / Linux Secret Service
+    缺失）。ssh/sql 的 _save_cfg 已经把 set_secret 包了 try/except，会触发
+    降级到磁盘的分支。
+    """
+
+    def setUp(self):
+        import plugins.sql_helper as sh
+        import plugins.ssh_runner as sr
+        import plugins._secret_store as ss
+        sh._CFG = {}; sr._CFG = {}
+        self.tmpdir = tempfile.mkdtemp()
+        self.sql_file = os.path.join(self.tmpdir, "db.json")
+        self.ssh_file = os.path.join(self.tmpdir, "ssh.json")
+        self._real_set = ss.set_secret
+        ss.set_secret = self._raise_backend_unavailable
+
+    def tearDown(self):
+        import plugins._secret_store as ss
+        ss.set_secret = self._real_set
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _raise_backend_unavailable(*a, **kw):
+        raise RuntimeError("keyring backend not available (simulated)")
+
+    def test_sql_password_falls_back_to_disk(self):
+        """sql_helper：keyring 不可用时 password 必须写盘（绝不丢）"""
+        import plugins.sql_helper as sh
+        sh._CFG = {"db1": {"type": "mysql", "password": "my_db_pw"}}
+        sh._save_cfg(path=self.sql_file)
+        with open(self.sql_file, encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["db1"]["password"], "my_db_pw",
+                         "keyring 不可用时密码必须降级落盘，否则永久丢失")
+
+    def test_ssh_password_falls_back_to_disk(self):
+        """ssh_runner：keyring 不可用时 password/key_passphrase 必须写盘"""
+        import plugins.ssh_runner as sr
+        sr._CFG = {"srv": {"host": "1.2.3.4", "user": "u",
+                            "password": "ssh_pw",
+                            "key_passphrase": "kp_pw"}}
+        sr._save_cfg(path=self.ssh_file)
+        with open(self.ssh_file, encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["srv"]["password"], "ssh_pw")
+        self.assertEqual(saved["srv"]["key_passphrase"], "kp_pw")
 
 
 if __name__ == "__main__":

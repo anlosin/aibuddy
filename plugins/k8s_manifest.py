@@ -33,7 +33,11 @@ SYSTEM_PROMPT = """你是一位资深 Kubernetes 工程师。当用户要求生�
 
 **绝对禁止的反模式**：使用 :latest 镜像、跳过资源限制、以 root 运行、提交明文 Secret、跳过探针、省略标准标签、生产环境单副本、把配置硬编码进镜像。"""
 
-TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "k8s_templates")
+TEMPLATES_DIR_LEGACY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "k8s_templates")
+# Day 20.6.16 (P0-AUD2-2)：本常量仅作源码态兼容保底；运行时走 _templates_dir()
+# —— 优先外部插件目录下的 k8s_templates/（用户可增删改），fallback 到内置。
+# 这样确保「外部优先」原则在子目录层同样成立（与 plugin_manager PLUGINS_DIR 的
+# 文件级外部优先对称）。
 
 # kind 别名 -> 实际文件名
 _KIND_ALIASES = {
@@ -55,10 +59,23 @@ _KIND_ALIASES = {
 }
 
 
+def _templates_dir():
+    """k8s 模板目录（外部优先；用户加的模板到 exe 同级 plugins/k8s_templates/ 也生效）"""
+    try:
+        from qwen_app import paths
+        ext = os.path.join(paths.external_plugins_dir(), "k8s_templates")
+        if os.path.isdir(ext):
+            return ext
+    except Exception:
+        pass
+    return TEMPLATES_DIR_LEGACY
+
+
 def _available_kinds():
-    if not os.path.isdir(TEMPLATES_DIR):
+    tdir = _templates_dir()
+    if not os.path.isdir(tdir):
         return []
-    return sorted(f[:-5] for f in os.listdir(TEMPLATES_DIR) if f.endswith(".yaml"))
+    return sorted(f[:-5] for f in os.listdir(tdir) if f.endswith(".yaml"))
 
 
 def _do_get_template(args):
@@ -66,7 +83,7 @@ def _do_get_template(args):
     if not kind:
         return "错误: 未提供 kind。可选: " + ", ".join(_available_kinds())
     key = _KIND_ALIASES.get(kind, kind)
-    path = os.path.join(TEMPLATES_DIR, f"{key}.yaml")
+    path = os.path.join(_templates_dir(), f"{key}.yaml")
     if not os.path.exists(path):
         return (f"暂不支持 kind='{kind}'。可选模板: " + ", ".join(_available_kinds())
                 + "\n（Secret/PVC 可用 pvc / secret；Service 别名 svc；ConfigMap 别名 cm）")

@@ -45,7 +45,14 @@ SYSTEM_PROMPT = """你拥有通过 SSH 操作远程 Linux/Unix 主机的能力�
 - 文件路径尽量用绝对路径，避免搞错远程工作目录
 """
 
-CONN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ssh_connections.json")
+CONN_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "ssh_connections.json"
+)
+# Day 20.6.16 (P0-AUD2-1)：上面这行只是**源码态**的兼容保底（开发用 python
+# main.py 时需要正确解析）。打包态真正走读写的路径在 _save_cfg / _load_cfg 内部
+# 从 qwen_app.paths.data_dir() 求得 —— 那是 exe 同级 data/（便携）或 %APPDATA%
+# （Program Files 下不可写时回退）。直接读本常量只发生在源码态一次性初始化，
+# **不会在 exe 里写到 _MEIPASS**（已审计验证：_MEIPASS 是临时目录）。
 
 OUTPUT_LIMIT = 8000  # 远程命令输出截断上限（字符）
 
@@ -65,22 +72,42 @@ _CLIENTS = {}
 _CFG = {}
 
 
-def _load_cfg():
+def _conn_file_path():
+    """连接配置真实落点 —— **运行时**才解析（避免打包态把数据写到 _MEIPASS）。
+
+    Day 20.6.16 (P0-AUD2-1)：模块顶层 CONN_FILE 是源码态兼容保底，仅供开发者
+    直接 `python plugins/python import X` 调试用。运行时（无论源码还是打包态）走
+    qwen_app.paths.data_dir()，打包态会得到 exe 同级 data/ 或 %APPDATA%\\qwen，
+    决不会落到 _MEIPASS。
+    """
+    try:
+        from qwen_app import paths
+        return os.path.join(paths.data_dir(), "ssh_connections.json")
+    except Exception:
+        return CONN_FILE
+
+
+def _load_cfg(path=None):
     global _CFG
     try:
-        if os.path.exists(CONN_FILE):
-            with open(CONN_FILE, "r", encoding="utf-8") as f:
-                _CFG = json.load(f)
+        f = path or _conn_file_path()
+        if os.path.exists(f):
+            with open(f, "r", encoding="utf-8") as fh:
+                _CFG = json.load(fh)
     except Exception:
         _CFG = {}
 
 
-def _save_cfg():
+def _save_cfg(path=None):
     """持久化连接配置，密码字段另存到系统凭据库（keyring），磁盘 cfg 不含明文。
 
     密码通过 _secret_store 加密保存到 Windows 凭据管理器 / macOS Keychain /
-    Linux Secret Service，重启后无需重输。keyring 不可用时退到内存缓存。
-    如需修改密码，重新调用 ssh_connect 即可覆盖。
+    Linux Secret Service，重启后无需重输。
+
+    Day 20.6.16 (P0-AUD2-4)：keyring 不可用时**降级把密码存回磁盘**（明文），
+    严格遵守项目「never lose user key」原则（与 config._sanitize_api_keys 策略
+    一致；详见 MEMORY.md）。此前把 password pop 后只在 keyring 存在时调
+    set_secret，keyring 不可用时**密码永久丢失**。
 
     Day 20.6.12 修复（实测发现，比审计报告更严重）：
       此前写的是 `from . import _secret_store` —— 相对导入在插件里**必然
@@ -90,7 +117,20 @@ def _save_cfg():
       表现是「ssh_connect 报成功、重启后连接全消失」。
       现改为绝对导入（与其它插件的 `from qwen_app.xxx import ...` 同模式），
       且导入失败/写盘失败都显式告警，不再静默。
+
+    path 参数：默认 None → 走 _conn_file_path()（运行时解析，避开 _MEIPASS）；
+    测试可显式传 tmp 路径。
+      此前写的是 `from . import _secret_store` —— 相对导入在插件里**必然
+      ImportError**，因为 plugin_manager 用 spec_from_file_location 以独立模块名
+      （plugin_ssh_runner）加载插件，__package__ 为空字符串。
+      而该异常被外层 `except Exception: pass` 吞掉 → **连 sanitized 配置都不写盘**，
+      表现是「ssh_connect 报成功、重启后连接全消失」。
+      现改为绝对导入（与其它插件的 `from qwen_app.xxx import ...` 同模式），
+      且导入失败/写盘失败都显式告警，不再静默。
     """
+    # Day 20.6.16 (P0-AUD2-4)：每次调用都重新 import，**避开**模块级缓存。
+    # 原因：测试用 patch.dict(sys.modules, {...}) 临时把 _secret_store 设为 None，
+    # 若缓存到模块属性上，with 退出后测试仍拿不到真实的 keyring。
     try:
         from plugins import _secret_store
     except Exception as e:                # noqa: BLE001 — 降级必须可控，但要留痕
@@ -103,15 +143,31 @@ def _save_cfg():
             c = dict(cfg)
             pw = c.pop("password", None) or ""
             kp = c.pop("key_passphrase", None) or ""
-            if pw and _secret_store:
-                _secret_store.set_secret("ssh", name, pw)
-            if kp and _secret_store:
-                _secret_store.set_secret("ssh", f"{name}#keypass", kp)
+            keyring_ok = bool(_secret_store)
+            if pw and keyring_ok:
+                try:
+                    _secret_store.set_secret("ssh", name, pw)
+                except Exception as e:
+                    print(f"[ssh_runner] keyring 写密码失败，回退存磁盘: {e}")
+                    c["password"] = pw          # 回退：明文存盘，绝不丢 Key
+            elif pw:
+                # keyring 不可用 → 密码不能丢；明文存盘（与 config._sanitize_api_keys 同策略）
+                c["password"] = pw
+            if kp and keyring_ok:
+                try:
+                    _secret_store.set_secret("ssh", f"{name}#keypass", kp)
+                except Exception as e:
+                    print(f"[ssh_runner] keyring 写私钥口令失败，回退存磁盘: {e}")
+                    c["key_passphrase"] = kp
+            elif kp:
+                c["key_passphrase"] = kp
             sanitized[name] = c
         else:
             sanitized[name] = cfg
     try:
-        with open(CONN_FILE, "w", encoding="utf-8") as f:
+        path = path or _conn_file_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
     except Exception as e:                # noqa: BLE001
         print(f"[ssh_runner] 连接配置写盘失败: {e}")
