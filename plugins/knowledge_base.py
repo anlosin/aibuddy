@@ -140,8 +140,29 @@ def _do_build(args):
     else:
         allowed = None
 
-    base = folder if os.path.isabs(folder) else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", folder)
+    if os.path.isabs(folder):
+        base = folder
+    else:
+        # Day 20.6.17 (P1-AUD2-2 收窄修复)：相对 folder **工作区优先**解析，
+        # 与 write_file / file_manager 的 workspace 语义对齐。修复前永远按
+        # `插件目录/../folder` 落点 —— 打包态 folder="." 会遍历整个 exe 目录
+        # （含 _internal/plugins）建索引。工作区里没有该子目录时才兜底程序
+        # 目录（源码态=项目根；打包态=exe 旁用户自放的目录）。
+        base = None
+        try:
+            from qwen_app.workspace import resolve_workspace
+            cand = os.path.join(resolve_workspace(), folder)
+            if os.path.isdir(cand):
+                base = os.path.abspath(cand)
+        except Exception:
+            pass
+        if base is None:
+            try:
+                from qwen_app import paths
+                base = os.path.join(paths.app_dir(), folder)
+            except Exception:
+                base = os.path.abspath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "..", folder))
     if not os.path.isdir(base):
         return f"错误: 目录不存在 - {base}"
 
