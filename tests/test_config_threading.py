@@ -1,12 +1,38 @@
 """Day 18 字体兜底 + SQLite 锁测试 — M6 + M8。"""
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+class _IsolatedConfigDB(unittest.TestCase):
+    """每个用例把 config 重定向到 tmpdir（Day 20.6.19：避免污染生产 db）。
+
+    修前 test_config_threading.py 直接打生产 data/conversations.db，
+    每次跑全量回归会写入 10 条 lock-test-{0..9} 到用户真实的对话列表。
+    """
+
+    def setUp(self):
+        from qwen_app import config
+        self._tmp = tempfile.mkdtemp(prefix="config_threading_")
+        db = os.path.join(self._tmp, "conversations.db")
+        config.set_db_path_for_tests(db)
+        self._config = config
+
+    def tearDown(self):
+        from qwen_app import config
+        try:
+            config.close_all_conns()
+        except Exception:
+            pass
+        config.set_db_path_for_tests(None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
 
 class TestStatusBarFontFallback(unittest.TestCase):
@@ -32,11 +58,11 @@ class TestStatusBarFontFallback(unittest.TestCase):
                       "必须含 Noto Sans CJK SC —— Linux 上最通用的 CJK 字体")
 
 
-class TestSqliteConnLock(unittest.TestCase):
+class TestSqliteConnLock(_IsolatedConfigDB):
     """M8: 写操作必须持 _CONN_LOCK，防止同线程内两路并发写踩坏。"""
 
     def test_concurrent_save_single_conversation_safe(self):
-        from qwen_app import config
+        config = self._config
 
         # 确保 DB 已建好（用 init）
         config.init_conversations_db()
@@ -84,7 +110,7 @@ class TestSqliteConnLock(unittest.TestCase):
 
     def test_lock_is_module_level(self):
         """_CONN_LOCK 必须是模块级单例，跨函数共用一把锁"""
-        from qwen_app import config
+        config = self._config
         self.assertTrue(hasattr(config, "_CONN_LOCK"),
                         "config 模块必须有 _CONN_LOCK")
         # 必须是 threading.Lock 实例

@@ -12,9 +12,14 @@ bridge 直接 emit 原始内容：
 - user → html.escape
 - assistant → markdown_to_html
 - tool_call / tool_result / system → html.escape（不实际用，但统一处理）
+
+Day 20.6.19: setUp 调 set_db_path_for_tests 把数据库重定向到 tmpdir，
+避免污染生产 conversations.db。tearDown 还原。
 """
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -102,6 +107,9 @@ class TestLoadSessionPreRendersHistory(unittest.TestCase):
         self.app = QApplication.instance() or QApplication(sys.argv)
         from qwen_app.chat_bridge import ChatBridge
         from qwen_app import config as _cfg
+        # 隔离 db 到 tmpdir（Day 20.6.19）
+        self._tmpdir = tempfile.mkdtemp(prefix="day20_4_3_render_")
+        _cfg.set_db_path_for_tests(os.path.join(self._tmpdir, "conversations.db"))
         self.bridge = ChatBridge(theme="light")
         self._cfg = _cfg
         # 准备一条带 user + AI + tool_call 的会话
@@ -122,9 +130,12 @@ class TestLoadSessionPreRendersHistory(unittest.TestCase):
             lambda cid, hist: self.loaded.append((cid, hist)))
 
     def tearDown(self):
-        convs, cur = self._cfg.load_conversations()
-        convs = [c for c in convs if c.get("id") != self.conv_id]
-        self._cfg.save_conversations(convs, cur)
+        try:
+            self._cfg.close_all_conns()
+        except Exception:
+            pass
+        self._cfg.set_db_path_for_tests(None)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_user_history_escaped(self):
         """history 中的 user 文本必须 escape"""
@@ -159,10 +170,23 @@ class TestSendUserBubblePreRenders(unittest.TestCase):
         from PyQt5.QtWidgets import QApplication
         self.app = QApplication.instance() or QApplication(sys.argv)
         from qwen_app.chat_bridge import ChatBridge
+        # 隔离 db 到 tmpdir（Day 20.6.19）
+        from qwen_app import config as _cfg
+        self._tmpdir = tempfile.mkdtemp(prefix="day20_4_3_bubble_")
+        _cfg.set_db_path_for_tests(os.path.join(self._tmpdir, "conversations.db"))
+        self._cfg = _cfg
         self.bridge = ChatBridge(theme="light")
         self.added = []
         self.bridge.messageAdded.connect(
             lambda who, payload: self.added.append((who, payload)))
+
+    def tearDown(self):
+        try:
+            self._cfg.close_all_conns()
+        except Exception:
+            pass
+        self._cfg.set_db_path_for_tests(None)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_user_text_with_lt_escaped(self):
         """emit 给 QML 的 user text 必须 escape"""
@@ -182,7 +206,7 @@ class TestSendUserBubblePreRenders(unittest.TestCase):
         # 这是设计选择：_append_history 第二个参数是 raw text，
         # 存盘保留 raw 是为了 reload 时能再次 escape / render
         # （避免双重 escape）
-        from qwen_app import config as _cfg
+        _cfg = self._cfg
         # 准备一个空会话
         test_id = "day20_4_3_userbubble"
         _cfg.save_single_conversation({

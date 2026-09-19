@@ -35,12 +35,32 @@
 - 旧的「直接 delete_session」路径必须消失
 """
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+def _isolate_db(test_self):
+    """Day 20.6.19：把 db 重定向到 tmpdir，tearDown 时调 _restore_db。"""
+    from qwen_app import config as _cfg
+    test_self._tmpdir = tempfile.mkdtemp(prefix="day20_4_3dot_")
+    _cfg.set_db_path_for_tests(os.path.join(test_self._tmpdir, "conversations.db"))
+    test_self._cfg = _cfg
+
+
+def _restore_db(test_self):
+    from qwen_app import config as _cfg
+    try:
+        _cfg.close_all_conns()
+    except Exception:
+        pass
+    _cfg.set_db_path_for_tests(None)
+    shutil.rmtree(test_self._tmpdir, ignore_errors=True)
 
 
 class TestSessionSlotsExist(unittest.TestCase):
@@ -72,11 +92,12 @@ class TestRenameSessionBehavior(unittest.TestCase):
         from PyQt5.QtWidgets import QApplication
         self.app = QApplication.instance() or QApplication(sys.argv)
         from qwen_app.chat_bridge import ChatBridge
-        self.bridge = ChatBridge(theme="light")
         from qwen_app import config as _cfg
         # 备份原配置
         self._backup_models, self._backup_cur = _cfg.load_models()
         self._original = _cfg.load_conversations()
+        # 隔离 db 到 tmpdir（Day 20.6.19）
+        _isolate_db(self)
         # 准备一条测试会话
         from qwen_app import config
         test_id = "day20_4_test_conv_001"
@@ -86,6 +107,7 @@ class TestRenameSessionBehavior(unittest.TestCase):
             "history": [{"role": "user", "content": "hi"}],
             "created_at": "2026-09-14T00:00:00",
         }, test_id)
+        self.bridge = ChatBridge(theme="light")
         self.test_id = test_id
         self.toast_msgs = []
         self.bridge.toast.connect(lambda m: self.toast_msgs.append(m))
@@ -93,11 +115,7 @@ class TestRenameSessionBehavior(unittest.TestCase):
         self.bridge.sessionListChanged.connect(lambda: self.list_changed.append(True))
 
     def tearDown(self):
-        from qwen_app import config as _cfg
-        # 恢复原配置（删测试会话）
-        convs, cur = _cfg.load_conversations()
-        convs = [c for c in convs if c.get("id") != self.test_id]
-        _cfg.save_conversations(convs, cur)
+        _restore_db(self)
 
     def test_rename_success(self):
         ok = self.bridge.rename_session(self.test_id, "新标题")
@@ -136,9 +154,11 @@ class TestClearSessionHistoryBehavior(unittest.TestCase):
     def setUp(self):
         from PyQt5.QtWidgets import QApplication
         self.app = QApplication.instance() or QApplication(sys.argv)
+        # 隔离 db 到 tmpdir（Day 20.6.19）
+        _isolate_db(self)
         from qwen_app.chat_bridge import ChatBridge
-        self.bridge = ChatBridge(theme="light")
         from qwen_app import config as _cfg
+        self.bridge = ChatBridge(theme="light")
         test_id = "day20_4_clear_test_001"
         _cfg.save_single_conversation({
             "id": test_id,
@@ -156,10 +176,7 @@ class TestClearSessionHistoryBehavior(unittest.TestCase):
             lambda cid, hist: self.loaded.append((cid, hist)))
 
     def tearDown(self):
-        from qwen_app import config as _cfg
-        convs, cur = _cfg.load_conversations()
-        convs = [c for c in convs if c.get("id") != self.test_id]
-        _cfg.save_conversations(convs, cur)
+        _restore_db(self)
 
     def test_clear_emits_session_loaded_when_current(self):
         """清的是当前会话 → emit sessionLoaded(空 list) 让 QML 清 messageModel"""
@@ -172,7 +189,7 @@ class TestClearSessionHistoryBehavior(unittest.TestCase):
 
     def test_clear_does_not_emit_when_other(self):
         """清的不是当前会话 → 不 emit sessionLoaded（避免误清 messageModel）"""
-        from qwen_app import config as _cfg
+        _cfg = self._cfg
         # 创建另一条会话
         other_id = "day20_4_clear_test_002"
         _cfg.save_single_conversation({

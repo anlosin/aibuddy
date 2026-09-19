@@ -31,6 +31,48 @@ _local = threading.local()
 _CONN_LOCK = threading.Lock()
 _all_conns = set()      # A3: 跟踪所有打开的连接（atexit 统一关闭）
 
+# 测试钩子：把当前 db 重定向到 tmpdir。**严禁生产代码调用**。
+# 测试必须在 setUp 里调 set_db_path_for_tests(tmpdir)，tearDown 里
+# 调 set_db_path_for_tests(None) 还原。直接调 save_single_conversation 等
+# 而不调本钩子的测试，会落进生产 conversations.db —— 这是 Day 20.6.19
+# 暴露的污染事故根因（test_config_threading.py 写入了 10 条 lock-test-*）。
+_TEST_PATH_OVERRIDE = {"db": None, "dir": None}
+
+
+def set_db_path_for_tests(db_path=None):
+    """测试专用：把数据库路径重定向到 db_path；None = 还原生产路径。
+
+    同时清掉所有线程的已缓存连接（_local.conn = None），强制下次
+    _get_db() 按新路径重连。任何已打开的旧连接会被 close。
+
+    必须在 setUp/tearDown 里成对调，否则后续测试 / 生产代码会落错位置。
+    """
+    with _CONN_LOCK:
+        # 关闭所有已打开连接（否则旧文件被 WAL 持锁，Windows 下 truncate 失败）
+        for conn in list(_all_conns):
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _all_conns.clear()
+        # 清线程局部
+        _local.conn = None
+        _TEST_PATH_OVERRIDE["db"] = db_path
+        if db_path:
+            _TEST_PATH_OVERRIDE["dir"] = os.path.dirname(db_path)
+        else:
+            _TEST_PATH_OVERRIDE["dir"] = None
+
+
+def _active_db_path():
+    """当前生效的 db 路径（测试 override 优先）。"""
+    return _TEST_PATH_OVERRIDE["db"] or CONVERSATIONS_DB
+
+
+def _active_db_dir():
+    """当前生效的 db 父目录。"""
+    return _TEST_PATH_OVERRIDE["dir"] or CONVERSATIONS_DIR
+
 
 def _get_db():
     """获取当前线程的 SQLite 连接（惰性创建）
@@ -38,13 +80,18 @@ def _get_db():
     Day 19 (H-NEW-6 修复): _all_conns.add() 必须在 _CONN_LOCK 内，
     否则 close_all_conns 遍历时其他线程 add 会触发
     RuntimeError: Set changed size during iteration。
+
+    Day 20.6.19: 路径走 _active_db_path()，让 set_db_path_for_tests 钩子
+    能把测试隔离到 tmpdir，避免污染生产 db。
     """
     db = getattr(_local, "conn", None)
     if db is None:
         # Day 19: 加锁保护 _all_conns.add 防止并发迭代异常
         with _CONN_LOCK:
-            os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
-            db = sqlite3.connect(CONVERSATIONS_DB)
+            db_dir = _active_db_dir()
+            db_path = _active_db_path()
+            os.makedirs(db_dir, exist_ok=True)
+            db = sqlite3.connect(db_path)
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA foreign_keys=ON")
