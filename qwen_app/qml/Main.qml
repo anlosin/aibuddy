@@ -1029,10 +1029,23 @@ ApplicationWindow {
                         anchors.rightMargin: 20
                         spacing: 12
                         // Day 10: 模型下拉（从 bridge.list_models() 动态填）
+                        // Day 20.6.20: ComboBox 显示用色板——
+                        // 暗黑模式下默认 Fusion 风格，下拉项高亮是浅蓝 + 深字，
+                        // 选中项文本与背景对比度足够但**下拉打开时**用户实测看不清。
+                        // 用 palette.windowText + highlight 强对比色统一两态。
                         ComboBox {
                             id: modelCombo
+                            objectName: "modelCombo"
                             Layout.preferredHeight: 32
                             Layout.preferredWidth: 200
+                            palette.windowText: root.pal.textPrimary
+                            palette.buttonText: root.pal.textPrimary
+                            palette.text: root.pal.textPrimary
+                            palette.base: root.pal.inputBg
+                            palette.button: root.pal.inputBg
+                            palette.highlight: root.pal.sendBtn
+                            palette.highlightedText: "#FFFFFF"
+                            palette.window: root.pal.inputBg
                             model: bridge ? bridge.list_models() : []
                             // 只显示 name 字段
                             textRole: "name"
@@ -1063,6 +1076,16 @@ ApplicationWindow {
                             objectName: "expertCombo"
                             Layout.preferredHeight: 32
                             Layout.preferredWidth: 150
+                            // Day 20.6.20: 与 modelCombo 同套 palette 覆盖，
+                            // 保证两套下拉视觉一致（见 modelCombo 注释）。
+                            palette.windowText: root.pal.textPrimary
+                            palette.buttonText: root.pal.textPrimary
+                            palette.text: root.pal.textPrimary
+                            palette.base: root.pal.inputBg
+                            palette.button: root.pal.inputBg
+                            palette.highlight: root.pal.sendBtn
+                            palette.highlightedText: "#FFFFFF"
+                            palette.window: root.pal.inputBg
                             model: bridge ? bridge.list_experts() : []
                             textRole: "name"
                             currentIndex: {

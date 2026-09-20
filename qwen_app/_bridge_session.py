@@ -58,17 +58,40 @@ class SessionMixin(object):
 
     @pyqtSlot(str)
     def delete_session(self, conv_id):
-        """删除会话；如果删的是当前会话则回退到第一个"""
+        """删除会话；如果删的是当前会话则回退到第一个 + 清空右侧内容。
+
+        Day 20.6.20 修复：删当前会话时原只 emit sessionListChanged，右侧
+        messageModel 仍展示旧会话内容（直到用户手动点别的会话才刷新）。
+        现在按 clear_session_history 的同模式，在删的是当前会话时 emit
+        sessionLoaded(空 list) 让 QML 清空 messageModel；删除且 new_cur
+        非空时则 emit sessionLoaded(new_cur, new_history) 让 QML 加载
+        切换目标会话的内容（与 list_sessions 切换逻辑一致）。
+        """
+        if not conv_id:
+            return
         try:
             convs, current_id = _config.load_conversations()
         except Exception:
             return
+        was_current = (conv_id == (current_id or self._current_conv_id))
         convs = [c for c in convs if c["id"] != conv_id]
-        new_cur = current_id if current_id != conv_id else (convs[0]["id"] if convs else None)
+        if was_current:
+            # 删当前会话：current 回退到剩下的第一条；右侧内容由 emit 同步
+            new_cur = convs[0]["id"] if convs else None
+        else:
+            new_cur = current_id
         _config.save_conversations(convs, new_cur)
-        if self._current_conv_id == conv_id:
-            self._current_conv_id = new_cur
+        self._current_conv_id = new_cur
         self.sessionListChanged.emit()
+        if was_current:
+            # 与 load_session 同语义：传 (conv_id, history) 让 QML 填右侧；
+            # 无目标会话则传 (None, []) 让 QML 清空
+            if new_cur:
+                target = next((c for c in convs if c["id"] == new_cur), None)
+                hist = (target or {}).get("history", [])
+                self.sessionLoaded.emit(new_cur, hist)
+            else:
+                self.sessionLoaded.emit("", [])
 
     @pyqtSlot(str, str, result=bool)
     def rename_session(self, conv_id, new_title):

@@ -256,6 +256,56 @@ class TestSessionManagement(unittest.TestCase):
         self.bridge.delete_session(id_b)
         self.assertNotEqual(self.bridge._current_conv_id, id_b)
 
+    def test_delete_current_session_emits_sessionLoaded_to_clear_right_pane(self):
+        """Day 20.6.20: 删当前会话时必须 emit sessionLoaded(新 id, 历史) 或
+        sessionLoaded('', []) 让 QML 同步右侧 messageModel。
+
+        修前只 emit sessionListChanged → messageModel 仍展示旧会话内容，
+        直到用户手动点别的会话才刷新（用户反馈「删除对话时没同步清理右侧」）。
+        """
+        id_a = self.bridge.create_session("A")
+        id_b = self.bridge.create_session("B")
+        self.created_ids.extend([id_a, id_b])
+        # 给 A 加一条历史（删 B 后 new_cur=A → QML 应加载 A 的历史）。
+        # 不能 save_single_conversation(target, id_a) —— 它的 current_id 参
+        # 会把 session_state 改回 id_a，让后续 delete_session(B) 走非当前分支。
+        from qwen_app import config as _cfg
+        convs, _ = _cfg.load_conversations()
+        target = next(c for c in convs if c["id"] == id_a)
+        target["history"] = [{"role": "user", "content": "A 的消息"}]
+        _cfg.save_conversations(convs, id_b)   # 保留 current_id=B
+        # 监听 sessionLoaded
+        captured = []
+        self.bridge.sessionLoaded.connect(lambda cid, hist: captured.append((cid, list(hist))))
+
+        self.bridge.delete_session(id_b)
+        self.assertEqual(len(captured), 1, "删当前会话必须 emit 一次 sessionLoaded")
+        cid, hist = captured[0]
+        self.assertEqual(cid, id_a, "应 emit new_cur（A）的 id")
+        self.assertEqual(hist, [{"role": "user", "content": "A 的消息"}],
+                         "QML 拿到的应是 A 的历史（与 load_session 同语义）")
+
+    def test_delete_last_session_emits_empty_sessionLoaded(self):
+        """Day 20.6.20: 删到只剩空时 emit sessionLoaded('', []) 清空右侧"""
+        id_a = self.bridge.create_session("唯一会话")
+        self.created_ids.append(id_a)
+        captured = []
+        self.bridge.sessionLoaded.connect(lambda cid, hist: captured.append((cid, list(hist))))
+        self.bridge.delete_session(id_a)
+        self.assertEqual(captured, [('', [])])
+
+    def test_delete_non_current_session_no_sessionLoaded(self):
+        """Day 20.6.20: 删的不是当前会话时不 emit sessionLoaded（不打扰右侧）"""
+        id_a = self.bridge.create_session("A")
+        id_b = self.bridge.create_session("B")
+        self.created_ids.extend([id_a, id_b])
+        # 当前会话是 B，删 A 不应 emit sessionLoaded
+        captured = []
+        self.bridge.sessionLoaded.connect(lambda cid, hist: captured.append((cid, list(hist))))
+        self.bridge.delete_session(id_a)
+        self.assertEqual(captured, [], "删非当前会话不应 emit sessionLoaded")
+        self.assertEqual(self.bridge._current_conv_id, id_b, "current 应保持 B")
+
     def test_load_nonexistent_session_is_noop(self):
         """load 一个不存在的 id 应该 noop（不 emit）"""
         captured = []
