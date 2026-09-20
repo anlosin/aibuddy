@@ -3,6 +3,7 @@ import os
 import json
 import sqlite3
 import threading
+import time
 
 
 from . import paths
@@ -62,6 +63,9 @@ def set_db_path_for_tests(db_path=None):
             _TEST_PATH_OVERRIDE["dir"] = os.path.dirname(db_path)
         else:
             _TEST_PATH_OVERRIDE["dir"] = None
+        # 重置健康检查标记：切库后下个连接要重新体检
+        global _DB_HEALTH_CHECKED
+        _DB_HEALTH_CHECKED = False
 
 
 def _active_db_path():
@@ -74,6 +78,106 @@ def _active_db_dir():
     return _TEST_PATH_OVERRIDE["dir"] or CONVERSATIONS_DIR
 
 
+# Day 20.6.20: 启动期健康检查 —— 每进程只跑一次（首次 _get_db 连接时）。
+# 背景（Day 20.6.19 事故）：db 曾被 truncate 至 0 字节 + schema 丢失，
+# save_conversations 的 try/except 把一切静默吞掉，污染与损坏全程无告警。
+_DB_HEALTH_CHECKED = False
+
+
+def _connect_plain(db_path):
+    """裸连接 + 标准 PRAGMA（WAL / 外键）。文件损坏时 PRAGMA 可能抛 DatabaseError。
+
+    PRAGMA 失败时必须先 close 再抛 —— 否则未关闭的连接在 Windows 上
+    持有文件句柄，后续 quarantine 改名会撞 WinError 32。
+    """
+    db = sqlite3.connect(db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        try:
+            db.close()
+        except Exception:
+            pass
+        raise
+    return db
+
+
+def _quarantine_corrupt_db(db_path, reasons):
+    """损坏处置：把 db 连同 -wal/-shm 改名为 ``<原名>.corrupt-<时间戳>`` 保留现场。
+
+    调用方必须已关闭该文件上的连接。绝不静默吞掉损坏。
+    """
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    for suffix in ("", "-wal", "-shm"):
+        src = db_path + suffix
+        if os.path.exists(src):
+            try:
+                os.rename(src, src + f".corrupt-{ts}")
+                print(f"[db-health] 损坏文件已保留: {src} -> .corrupt-{ts}")
+            except OSError as e:
+                print(f"[db-health] ⚠️ 损坏文件改名失败 {src}: {e}")
+    print(f"[db-health] ⚠️ 数据库损坏（{'; '.join(reasons)}），"
+          f"已按全新数据库重建；损坏现场保留在 .corrupt-{ts} 后缀文件中")
+
+
+def _open_db_with_health_check(db_path):
+    """连接数据库；每进程首次连接时做健康体检（Day 20.6.20）。
+
+    判损坏条件：
+      1. 文件存在但 0 字节 —— 健康库永远不是 0 字节（曾被 truncate）
+      2. 连接 / PRAGMA 抛 DatabaseError（文件头不是 SQLite 格式等）
+      3. PRAGMA quick_check 结果 != 'ok'
+
+    顺序很关键：**0 字节检测必须在连接之前** —— WAL pragma 会把 0 字节
+    文件物化成合法空库，连接后再查 size 就漏检了（首轮实现踩过）。
+    """
+    global _DB_HEALTH_CHECKED
+    first = not _DB_HEALTH_CHECKED
+    _DB_HEALTH_CHECKED = True
+
+    if not first:
+        return _connect_plain(db_path)
+
+    # ── 首次连接：体检 ──
+    # 1) 0 字节预检（连接前做，理由见 docstring）
+    if os.path.exists(db_path) and os.path.getsize(db_path) == 0:
+        _quarantine_corrupt_db(db_path, ["文件为 0 字节（疑似被 truncate）"])
+        return _connect_plain(db_path)
+
+    # 2) 连接 + PRAGMA（垃圾文件在这里炸 DatabaseError）
+    try:
+        db = _connect_plain(db_path)
+    except sqlite3.DatabaseError as e:
+        _quarantine_corrupt_db(db_path, [f"连接/PRAGMA 失败: {e}"])
+        return _connect_plain(db_path)
+
+    # 3) quick_check
+    try:
+        row = db.execute("PRAGMA quick_check").fetchone()
+        result = row[0] if row else "unknown"
+        if result != "ok":
+            db.close()
+            _quarantine_corrupt_db(db_path, [f"quick_check 结果: {result}"])
+            return _connect_plain(db_path)
+    except sqlite3.DatabaseError as e:
+        try:
+            db.close()
+        except Exception:
+            pass
+        _quarantine_corrupt_db(db_path, [f"quick_check 抛异常: {e}"])
+        return _connect_plain(db_path)
+
+    return db
+
+
+def _reset_db_health_for_tests():
+    """仅测试用：重置「已检查」标记，让下个 _get_db 重新跑健康检查。"""
+    global _DB_HEALTH_CHECKED
+    _DB_HEALTH_CHECKED = False
+
+
 def _get_db():
     """获取当前线程的 SQLite 连接（惰性创建）
 
@@ -83,6 +187,9 @@ def _get_db():
 
     Day 20.6.19: 路径走 _active_db_path()，让 set_db_path_for_tests 钩子
     能把测试隔离到 tmpdir，避免污染生产 db。
+
+    Day 20.6.20: 首次连接走 _open_db_with_health_check
+    （quick_check + 0 字节检测，损坏保留现场）。
     """
     db = getattr(_local, "conn", None)
     if db is None:
@@ -91,10 +198,7 @@ def _get_db():
             db_dir = _active_db_dir()
             db_path = _active_db_path()
             os.makedirs(db_dir, exist_ok=True)
-            db = sqlite3.connect(db_path)
-            db.row_factory = sqlite3.Row
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA foreign_keys=ON")
+            db = _open_db_with_health_check(db_path)
             _local.conn = db
             _all_conns.add(db)
     return db
@@ -284,48 +388,10 @@ def _run_migrations(db):
             break
 
 
-def _migrate_legacy_user_version(db):
-    """兼容迁移：老版本用 PRAGMA user_version 存 current_id（被截到 31 位整数）。
-
-    这里把 user_version 的值当作 "可能的 current_id 候选" —— 反查 conversations.id
-    能精确匹配上的直接修复到 session_state；匹配不上的回退到第一条对话，
-    保证不丢用户可见数据（多切几次会话碰运气才能恢复，但首启动场景下多数可还原）。
-    同步把 schema_version 设为 SCHEMA_VERSION，让 _migrate_to_v1 不再重复执行。
-    """
-    cur_ver = db.execute("PRAGMA user_version").fetchone()[0]
-    if cur_ver == SCHEMA_VERSION:
-        return                                  # 已是最新 schema，无需迁移
-    # 检查 session_state 是否已有 current_id
-    existing = db.execute("SELECT current_id FROM session_state WHERE id=1").fetchone()
-    if existing and existing[0]:
-        # 已是新 schema 但 PRAGMA 没同步 —— 把 PRAGMA 修正过来即可
-        db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        return
-    if cur_ver:
-        # 老格式：user_version 存的是 current_id 的 int 截位 → 还原成 hex → 反查
-        try:
-            candidate = hex(int(cur_ver))[2:]
-            hit = db.execute(
-                "SELECT id FROM conversations WHERE id = ?", (candidate,)
-            ).fetchone()
-            if hit:
-                db.execute(
-                    "UPDATE session_state SET current_id = ? WHERE id = 1", (hit[0],)
-                )
-        except Exception:
-            pass
-    # 不论命中与否：把 user_version 重置为真正的 schema 版本
-    db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-    # 会话仍为 None 时回退到第一条（保证 UI 不空）
-    cur = db.execute("SELECT current_id FROM session_state WHERE id=1").fetchone()
-    if not cur or not cur[0]:
-        first = db.execute(
-            "SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1"
-        ).fetchone()
-        if first:
-            db.execute(
-                "UPDATE session_state SET current_id = ? WHERE id = 1", (first[0],)
-            )
+# Day 20.6.20: 删除了第二个重复的 _migrate_legacy_user_version 定义
+# （原 L391-432，与 L304 版功能完全等价、仅排版/注释不同）。
+# Python 后定义覆盖前定义——删除前生效的是 L391 版；现 L304 版成为唯一
+# 定义，功能不变。护栏：tests/test_schema_migration.py 覆盖其行为。
 
 
 # ═══ 模型配置 ═══

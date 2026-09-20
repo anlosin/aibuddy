@@ -37,6 +37,28 @@ from qwen_app.chat_bridge import ChatBridge
 _APP = QApplication.instance() or QApplication(sys.argv)
 
 
+# ── Day 20.6.20: 模块级 db 隔离（create_session/save 会写库，绝不落生产 db） ──
+_iso_tmpdir = None
+
+
+def setUpModule():
+    global _iso_tmpdir
+    from qwen_app import config as _cfg
+    _iso_tmpdir = tempfile.mkdtemp(prefix="iso_bridge_bubble_")
+    _cfg.set_db_path_for_tests(os.path.join(_iso_tmpdir, "conversations.db"))
+
+
+def tearDownModule():
+    from qwen_app import config as _cfg
+    try:
+        _cfg.close_all_conns()
+    except Exception:
+        pass
+    _cfg.set_db_path_for_tests(None)
+    if _iso_tmpdir:
+        shutil.rmtree(_iso_tmpdir, ignore_errors=True)
+
+
 def _pump(ms=200):
     """跑 Qt 事件循环 ms 毫秒，使信号能被处理"""
     loop = QEventLoop()

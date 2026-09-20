@@ -193,5 +193,32 @@ class TestIsolationHelpersAvailable(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestCreateSessionCallersIsolated(unittest.TestCase):
+    """Day 20.6.20 扩展：调 bridge.create_session 的测试文件也必须隔离。
+
+    create_session 间接走 save_single_conversation 写库——软隔离
+    （created_ids + tearDown delete_session）崩在中间就会污染生产 db。
+    模块级 setUpModule + set_db_path_for_tests 是要求的硬隔离形态。
+    """
+
+    def test_all_create_session_files_have_isolation(self):
+        offenders = []
+        for name in sorted(os.listdir(TESTS_DIR)):
+            if not name.startswith("test_") or not name.endswith(".py"):
+                continue
+            if name == os.path.basename(__file__):
+                continue
+            fp = os.path.join(TESTS_DIR, name)
+            with open(fp, encoding="utf-8") as f:
+                src = f.read()
+            if "create_session(" not in src:
+                continue
+            if "set_db_path_for_tests" not in src:
+                offenders.append(name)
+        self.assertEqual(offenders, [],
+                         "以下测试文件调了 create_session 但没有 set_db_path_for_tests "
+                         "隔离（会污染生产 db）：" + ", ".join(offenders))
+
+
 if __name__ == "__main__":
     unittest.main()

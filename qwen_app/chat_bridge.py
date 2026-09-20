@@ -119,9 +119,13 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
     toolCallInProgress = pyqtProperty(bool, _get_tool_in_progress, notify=toolCallInProgressChanged)
     currentToolName = pyqtProperty(str, _get_current_tool_name, notify=currentToolNameChanged)
 
-    def __init__(self, theme="light", parent=None):
+    def __init__(self, theme=None, parent=None):
         super().__init__(parent)
-        self._theme = theme
+        # Day 20.6.20: 主题持久化。
+        # - theme=None（main.py / chat_qml_window 默认路径）→ 读 cfg["theme"]
+        #   （缺省 "light"），重启后恢复上次选择；
+        # - 显式传入（测试 / 探针，几乎全部传 "light"）→ 按传入值，保证确定性。
+        self._theme = theme or "light"
         self._is_busy = False   # Day 7: pyqtProperty backend (use _set_busy to update)
         self._last_who = None      # 当前正在流式的气泡 who
         # Day 6: 累积 buffer（按 who 维度），finalize 时用 markdown_to_html 渲染
@@ -163,6 +167,16 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
                 self._current_expert_id = _saved_expert
         except Exception:
             pass
+        # Day 20.6.20: 主题持久化 —— theme=None（应用默认路径）时读
+        # cfg["theme"]（缺省 "light"）；显式传入（测试/探针）已在上面按
+        # 传入值生效，不读配置，保证测试确定性。
+        if theme is None:
+            try:
+                _saved_theme = (_cfg_full.get("theme") or "").strip().lower()
+                if _saved_theme in ("light", "dark"):
+                    self._theme = _saved_theme
+            except Exception:
+                pass
         # Day 14: 插件热更新 watcher
         self._plugin_watcher = None
         # Day 8: 当前会话 ID（main.py 启动日志读这个）
@@ -199,6 +213,15 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
     def set_theme(self, name: str):
         if name in ("light", "dark") and name != self._theme:
             self._theme = name
+            # Day 20.6.20: 主题持久化（重启不再回浅色）—— 与 current_expert
+            # 同一模式：load → 写键 → save；失败仅打印不阻塞切换。
+            try:
+                from . import config as _cfg
+                cfg = _cfg.load_config()
+                cfg["theme"] = name
+                _cfg.save_config(cfg)
+            except Exception as e:
+                print(f"[chat_bridge] 持久化 theme 失败: {e}")
             self.themeChanged.emit(name)
 
     @pyqtSlot(result=str)

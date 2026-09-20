@@ -198,7 +198,8 @@ def run_qtquick(app):
         engine.warnings.connect(
             lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
 
-        bridge = ChatBridge(theme="light")
+        # Day 20.6.20: theme=None → 从 cfg["theme"] 读持久化偏好（缺省 light）
+        bridge = ChatBridge()
         engine.rootContext().setContextProperty("bridge", bridge)
 
         # 保活：engine 一旦被 GC，QML 根窗口立即销毁（见 _KEEP_ALIVE 注释）

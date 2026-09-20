@@ -14,6 +14,29 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+# ── Day 20.6.20: 模块级 db 隔离（create_session/save 会写库，绝不落生产 db） ──
+import shutil as _shutil
+import tempfile as _tempfile
+_iso_tmpdir = None
+
+
+def setUpModule():
+    global _iso_tmpdir
+    from qwen_app import config as _cfg
+    _iso_tmpdir = _tempfile.mkdtemp(prefix="iso_chat_bridge_")
+    _cfg.set_db_path_for_tests(os.path.join(_iso_tmpdir, "conversations.db"))
+
+
+def tearDownModule():
+    from qwen_app import config as _cfg
+    try:
+        _cfg.close_all_conns()
+    except Exception:
+        pass
+    _cfg.set_db_path_for_tests(None)
+    if _iso_tmpdir:
+        _shutil.rmtree(_iso_tmpdir, ignore_errors=True)
+
 from PyQt5.QtCore import QCoreApplication, QEventLoop, QTimer
 from qwen_app.chat_bridge import ChatBridge
 

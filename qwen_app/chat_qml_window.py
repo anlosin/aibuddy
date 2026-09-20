@@ -26,8 +26,8 @@ def main():
     engine.warnings.connect(
         lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
 
-    # 注入桥
-    bridge = ChatBridge(theme="light")
+    # 注入桥（Day 20.6.20: theme=None → 读持久化偏好）
+    bridge = ChatBridge()
     engine.rootContext().setContextProperty("bridge", bridge)
 
     qml_dir = os.path.join(os.path.dirname(__file__), "qml")

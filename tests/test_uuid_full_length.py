@@ -12,11 +12,34 @@
 """
 import os
 import re
+import shutil
 import sys
+import tempfile
 import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+
+# ── Day 20.6.20: 模块级 db 隔离（create_session 会写库，绝不落生产 db） ──
+_iso_tmpdir = None
+
+
+def setUpModule():
+    global _iso_tmpdir
+    from qwen_app import config as _cfg
+    _iso_tmpdir = tempfile.mkdtemp(prefix="iso_uuid_full_")
+    _cfg.set_db_path_for_tests(os.path.join(_iso_tmpdir, "conversations.db"))
+
+
+def tearDownModule():
+    from qwen_app import config as _cfg
+    try:
+        _cfg.close_all_conns()
+    except Exception:
+        pass
+    _cfg.set_db_path_for_tests(None)
+    if _iso_tmpdir:
+        shutil.rmtree(_iso_tmpdir, ignore_errors=True)
 
 
 class TestNoUUIDTruncation(unittest.TestCase):
