@@ -1030,9 +1030,9 @@ ApplicationWindow {
                         spacing: 12
                         // Day 10: 模型下拉（从 bridge.list_models() 动态填）
                         // Day 20.6.20: ComboBox 显示用色板——
-                        // 暗黑模式下默认 Fusion 风格，下拉项高亮是浅蓝 + 深字，
-                        // 选中项文本与背景对比度足够但**下拉打开时**用户实测看不清。
-                        // 用 palette.windowText + highlight 强对比色统一两态。
+                        // 暗黑模式下默认 Fusion 风格，**palette.highlight 不影响
+                        // 下拉项**（实测：选中项仍灰底深字，靠左边窄蓝条区分），
+                        // 必须 override delegate 才能让高亮项真正可读。
                         ComboBox {
                             id: modelCombo
                             objectName: "modelCombo"
@@ -1043,9 +1043,29 @@ ApplicationWindow {
                             palette.text: root.pal.textPrimary
                             palette.base: root.pal.inputBg
                             palette.button: root.pal.inputBg
-                            palette.highlight: root.pal.sendBtn
-                            palette.highlightedText: "#FFFFFF"
                             palette.window: root.pal.inputBg
+                            // 下拉项 delegate：current 项用 sendBtn + 白字，
+                            // 其它项用 inputBg + textPrimary —— 强对比
+                            delegate: ItemDelegate {
+                                width: modelCombo.width
+                                height: 28
+                                background: Rectangle {
+                                    color: (modelCombo.currentIndex === index)
+                                           ? root.pal.sendBtn
+                                           : root.pal.inputBg
+                                    border.color: root.pal.inputBorder
+                                    border.width: 1
+                                }
+                                contentItem: Text {
+                                    text: modelData.name || ""
+                                    color: (modelCombo.currentIndex === index)
+                                           ? "#FFFFFF"
+                                           : root.pal.textPrimary
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: 10
+                                }
+                            }
                             model: bridge ? bridge.list_models() : []
                             // 只显示 name 字段
                             textRole: "name"
@@ -1076,16 +1096,34 @@ ApplicationWindow {
                             objectName: "expertCombo"
                             Layout.preferredHeight: 32
                             Layout.preferredWidth: 150
-                            // Day 20.6.20: 与 modelCombo 同套 palette 覆盖，
+                            // Day 20.6.20: 与 modelCombo 同套 palette + delegate，
                             // 保证两套下拉视觉一致（见 modelCombo 注释）。
                             palette.windowText: root.pal.textPrimary
                             palette.buttonText: root.pal.textPrimary
                             palette.text: root.pal.textPrimary
                             palette.base: root.pal.inputBg
                             palette.button: root.pal.inputBg
-                            palette.highlight: root.pal.sendBtn
-                            palette.highlightedText: "#FFFFFF"
                             palette.window: root.pal.inputBg
+                            delegate: ItemDelegate {
+                                width: expertCombo.width
+                                height: 28
+                                background: Rectangle {
+                                    color: (expertCombo.currentIndex === index)
+                                           ? root.pal.sendBtn
+                                           : root.pal.inputBg
+                                    border.color: root.pal.inputBorder
+                                    border.width: 1
+                                }
+                                contentItem: Text {
+                                    text: modelData.name || ""
+                                    color: (expertCombo.currentIndex === index)
+                                           ? "#FFFFFF"
+                                           : root.pal.textPrimary
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: 10
+                                }
+                            }
                             model: bridge ? bridge.list_experts() : []
                             textRole: "name"
                             currentIndex: {
