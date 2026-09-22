@@ -17,6 +17,7 @@
 - 独立模式：python scheduler_run.py（可在内网服务器用 systemd/计划任务 24/7 跑）
 """
 import os
+import re
 import json
 import uuid
 import threading
@@ -281,6 +282,11 @@ def _build_system_prompt(plugins, enabled_plugins, enable_tools):
                 "\n\n规则：需要这些工具才能完成的任务必须调用工具；"
                 "调用后根据结果给出最终回复；不要说你做不到——你拥有这些工具。"
                 "对于复杂任务，先拆解成多步，连续调用工具直到完成。"
+                "\n选择工具时必须选语义最直接匹配的那个"
+                "（例如查天气用 get_weather，查当前时间用 clock/time 类工具，"
+                "web_search 只用于搜索引擎兜底查询）。"
+                "\n禁止编造事实：查不到结果就明确说查不到；"
+                "涉及日期一律以系统提示中给出的当前真实时间为准，禁止自行推测。"
             )
     return "\n\n".join(parts) if parts else "你是一个能干活的智能助手。"
 
@@ -342,8 +348,55 @@ def _strip_think(text):
     return text.strip()
 
 
+# 文本协议工具调用：<tool_call>{"name":..., "arguments":{...}}</tool_call>
+# （Day 20.6.22 / P0：部分模型不开结构化 tool_calls，把调用意图写成正文标签，
+#  旧逻辑只读 OpenAI 协议字段 → 139 次执行 0 次真实工具调用）
+_TEXT_TC_RE = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+
+def _parse_text_tool_calls(content):
+    """从模型文本输出中解析 <tool_call>{json}</tool_call> 块。
+
+    返回 [(name, args_dict, matched_text), ...]；无法解析的块静默忽略。
+    兼容两种 JSON 形态：
+    - {"name": "x", "arguments": {...}}        （Qwen 系主流）
+    - {"function": {"name": "x", "arguments": {...}}}  （OpenAI 原文形态）
+    arguments 为 JSON 字符串时自动二次解析。
+    """
+    calls = []
+    for m in _TEXT_TC_RE.finditer(content or ""):
+        try:
+            obj = json.loads(m.group(1))
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        fn = obj.get("function") if isinstance(obj.get("function"), dict) else obj
+        name = fn.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        args = fn.get("arguments", fn.get("parameters", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        calls.append((name, args, m.group(0)))
+    return calls
+
+
+# 单次任务执行的总耗时上限（秒）：每轮 API 调用 timeout=120s，
+# max_rounds=12 理论最长 24 分钟——9-20 观测到连续 3 次执行各 ~360s
+# 全是 error 空回复，必须给整个 agent 循环加 deadline。
+RUN_MAX_TOTAL_SECONDS = 600
+
+
 def run_automation(auto, client, model_id, plugins, enabled_plugins,
-                    enable_thinking, enable_tools, max_rounds):
+                    enable_thinking, enable_tools, max_rounds,
+                    max_total_seconds=RUN_MAX_TOTAL_SECONDS):
     """无界面执行一个自动化任务，返回 (final_text, tool_logs, error)
 
     tool_logs 为 [(工具名, 参数摘要, 结果摘要), ...]，用于写执行记录。
@@ -355,15 +408,25 @@ def run_automation(auto, client, model_id, plugins, enabled_plugins,
     extra = {}
     if enable_thinking:
         extra["enable_thinking"] = True
+    deadline = (datetime.now() + timedelta(seconds=max_total_seconds)
+                if max_total_seconds and max_total_seconds > 0 else None)
     try:
         sys_p = _build_system_prompt(plugins, enabled_plugins, enable_tools)
-        messages = []
-        if sys_p:
-            messages.append({"role": "system", "content": sys_p})
+        # Day 20.6.22 / P1：注入当前真实时间，防止模型对「今天/明天」类
+        # 相对时间自行编造日期（日志中出现过幻觉的 2023-10-15）
+        now_line = (f"\n\n当前真实时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}，"
+                    f"{_WEEKDAY_NAMES[datetime.now().weekday()]}。"
+                    "涉及「今天/明天/昨天」等相对时间时以此为准，禁止自行推测日期。")
+        messages = [{"role": "system", "content": (sys_p or "") + now_line}]
         messages.append({"role": "user", "content": prompt})
 
         tools = get_enabled_tools(plugins, enabled_plugins) if enable_tools else []
+        rnd = 0
         for rnd in range(max_rounds + 1):
+            if deadline is not None and datetime.now() > deadline:
+                error = (f"任务总耗时超过 {max_total_seconds} 秒上限，已中止"
+                         f"（已执行 {rnd} 轮）")
+                break
             kwargs = {
                 "model": model_id,
                 "messages": messages,
@@ -377,44 +440,59 @@ def run_automation(auto, client, model_id, plugins, enabled_plugins,
             resp = client.chat.completions.create(**kwargs)
             msg = resp.choices[0].message
             content = msg.content or ""
+            # 统一收集本轮待执行调用：[(name, args_dict, tc_id, asst_content)]
+            pending = []
             tcs = getattr(msg, "tool_calls", None)
             if tcs:
-                asst = {
-                    "role": "assistant",
-                    "content": content,
-                    "tool_calls": [],
-                }
                 for i, tc in enumerate(tcs):
                     tc_id = tc.id or f"call_{i}"
-                    asst["tool_calls"].append({
-                        "id": tc_id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    })
-                messages.append(asst)
-                for i, tc in enumerate(tcs):
-                    fname = tc.function.name
                     try:
                         fargs = json.loads(tc.function.arguments or "{}")
                     except Exception:
                         fargs = {}
-                    result = dispatch_tool(plugins, enabled_plugins, fname, fargs)
-                    tool_logs.append((fname, str(fargs)[:200], str(result)[:400]))
-                    messages.append({
-                        "role": "tool",
-                        "content": str(result),
-                        "tool_call_id": tc.id or f"call_{i}",
-                    })
-                continue
+                    pending.append((tc.function.name, fargs, tc_id, content))
             else:
+                # P0 fallback：结构化 tool_calls 为空时，解析正文中的
+                # <tool_call> 标签块（文本协议模型）
+                text_calls = _parse_text_tool_calls(content)
+                if text_calls:
+                    asst_content = content
+                    for _n, _a, matched in text_calls:
+                        asst_content = asst_content.replace(matched, "")
+                    asst_content = asst_content.strip()
+                    pending = [
+                        (n, a, f"textcall_{rnd}_{i}", asst_content)
+                        for i, (n, a, _m) in enumerate(text_calls)]
+            if not pending:
                 final = content
                 break
+            asst_content = pending[0][3]
+            asst = {
+                "role": "assistant",
+                "content": asst_content,
+                "tool_calls": [
+                    {"id": tc_id, "type": "function",
+                     "function": {"name": n,
+                                  "arguments": json.dumps(a, ensure_ascii=False)}}
+                    for n, a, tc_id, _c in pending],
+            }
+            messages.append(asst)
+            for n, a, tc_id, _c in pending:
+                result = dispatch_tool(plugins, enabled_plugins, n, a)
+                tool_logs.append((n, str(a)[:200], str(result)[:400]))
+                messages.append({
+                    "role": "tool",
+                    "content": str(result),
+                    "tool_call_id": tc_id,
+                })
+            continue
+        else:
+            # for 循环走完没 break：轮次用尽仍拿不到最终回复
+            final = ""
+            error = error or f"工具调用轮次超过上限({max_rounds})，已终止"
         # 思考模型（QwQ 等）非流式返回带 <think> 原文，执行记录里不该出现
         final = _strip_think(final)
-        if not final:
+        if not final and not error:
             final = "(模型未返回有效内容)"
     except Exception as e:
         error = f"{type(e).__name__}: {e}"
@@ -612,7 +690,9 @@ class Scheduler:
         final, tool_logs, error = run_automation(
             auto, client, model_id, self.plugins,
             self.enabled_plugins, self.enable_thinking, self.enable_tools,
-            auto.get("max_rounds", self.max_rounds))
+            auto.get("max_rounds", self.max_rounds),
+            max_total_seconds=auto.get("max_total_seconds",
+                                       RUN_MAX_TOTAL_SECONDS))
         if m_err:
             error = (m_err + ("；" + error if error else "")) if error else m_err
         finished = datetime.now()
