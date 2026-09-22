@@ -19,6 +19,65 @@ from . import chat_render
 class StreamMixin(object):
     """真实流式路径：WorkerThread 桥接 / 流 buffer / 工具调用气泡 / 渲染辅助。"""
 
+    def _collect_history_for_context(self, conv_id):
+        """Day 20.6.22: 上下文记忆——把当前会话历史转成 LLM 可消费的 messages。
+
+        与 chat_window.on_send_message 第 595 行 `messages = list(self.conversation_history)`
+        同语义，但 QtQuick 路径之前完全没调用，模型每轮只看到当前 user 一条 → 「上下文不发送」。
+
+        行为：
+        - enable_context 关 / 无 conv_id / 历史为空 → 返回 []
+        - 截取最近 N 条（N=_context_history_limit，默认 50；与 compressor
+          COMPRESS_THRESHOLD=20 同数量级，加 30 条缓冲）
+        - 过滤 __is_summary__ 这类内部标记（避免 LLM 看到系统摘要标记）
+        - 只保留 {role, content} 两字段（OpenAI 协议不需要 time / is_summary 等元数据）
+        - 单条 content 已在 _append_history 里做过 MAX_CONTENT_LEN 截断，这里
+          信任 _append_history 的截断；超出本方法不再二次截断（避免重复截断污染）
+        - history 项含工具调用元数据（tool_calls / tool_call_id）时丢弃该条
+          —— QtQuick 路径历史上没把工具调用元数据写到 history（chat_window
+          也没），防御性保留即可。
+        """
+        if not conv_id:
+            return []
+        if not getattr(self, "_enable_context", True):
+            return []
+        try:
+            convs, _ = _config.load_conversations()
+        except Exception as e:
+            print(f"[chat_bridge] _collect_history_for_context 加载失败: {e}")
+            return []
+        conv = next((c for c in convs if c.get("id") == conv_id), None)
+        if conv is None:
+            return []
+        raw = conv.get("history") or []
+        if not raw:
+            return []
+        limit = int(getattr(self, "_context_history_limit", 50) or 50)
+        tail = raw[-limit:]
+        out = []
+        for h in tail:
+            if not isinstance(h, dict):
+                continue
+            role = h.get("role")
+            content = h.get("content")
+            if role not in ("user", "assistant", "system", "tool"):
+                continue
+            if not isinstance(content, str):
+                continue
+            # 跳过带工具调用结构化字段的历史项（防御性，正常情况下 history 不含）
+            if "tool_calls" in h or "tool_call_id" in h:
+                continue
+            # 跳过 compressor 写入的摘要标记项（__is_summary__）——
+            # 该字段是内部标记，不应让 LLM 看到；同时摘要本身的 content 是
+            # 「以下是早期对话摘要：...」元注释，与真正的对话消息混排会
+            # 让模型产生困惑。保留摘要的语义是「压进最近 50 条以内」，到
+            # 这里时 compressor 应该已经把摘要前置到 history 头部与最近消息
+            # 同发即可，单独一条混在 tail 里没有意义。
+            if h.get("__is_summary__"):
+                continue
+            out.append({"role": role, "content": content})
+        return out
+
     def start_real_chat(self, user_text: str, use_fake: bool = False, user_content=None,
                         system_prompt: str = ""):
         """Day 9: 启动一个真 WorkerThread。client 优先从 config 读取：
@@ -76,20 +135,26 @@ class StreamMixin(object):
 
         # Day 19: 用真实 model_id / 来自全局偏好的 enable_thinking / enable_tools
         # max_rounds=3 是默认；自主模式可在偏好设置里调大（chat_window 路径会读）
+        # Day 20.6.22: 上下文记忆（QtQuick 路径之前只发 system+user，备用窗口
+        # chat_window.py 第 595 行 messages = list(self.conversation_history)）。
+        # 现在按 enable_context 开关把当前会话 history 拼到 user 之前；关闭时
+        # 回退单轮对话（仅 user 一条），与 chat_window 的 enable_context 同语义。
+        user_msg = {"role": "user",
+                    "content": (user_content if user_content is not None else user_text)}
+        if system_prompt:
+            base_messages = [{"role": "system", "content": system_prompt}]
+        else:
+            base_messages = []
+        history_messages = self._collect_history_for_context(
+            self._current_conv_id)
+        # 顺序：system → 历史（最多 50 条）→ 当前 user
+        messages = base_messages + history_messages + [user_msg]
         self._worker = WorkerThread(
             client=client,
             model_id=real_model_id,
             enable_thinking=real_enable_thinking,
             enable_tools=real_enable_tools,
-            # Day 19 (C-NEW-3 修复): system_prompt（来自专家/插件/工具引导）
-            # 插在 messages 第一条。chat_window 路径在 on_send_message 也会插；
-            # QtQuick 路径之前完全没插。
-            messages=(
-                [{"role": "system", "content": system_prompt}] +
-                [{"role": "user", "content": (user_content if user_content is not None else user_text)}]
-                if system_prompt else
-                [{"role": "user", "content": (user_content if user_content is not None else user_text)}]
-            ),
+            messages=messages,
             plugins=self._discover_plugins(),
             enabled_plugins=self._enabled_plugin_names(),
             max_rounds=3,                 # 最多 3 轮工具调用循环

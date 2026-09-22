@@ -129,6 +129,26 @@ ApplicationWindow {
                 enabled: bridge !== undefined && bridge !== null
                 onTriggered: if (bridge) bridge.set_theme(root.themeName === "dark" ? "light" : "dark")
             }
+            // Day 20.6.22: 上下文记忆开关 —— QtQuick 路径之前没暴露这个开关
+            // （chat_window 有 `enable_context` + 状态栏 + 菜单切换），用户迁过来
+            // 感觉「开关没了 / 上下文不发送了」。菜单项即时切换 + 持久化到 cfg；
+            // root.contextEnabled 与菜单文本双向绑定，刷新 menu 时文本跟着变。
+            MenuItem {
+                id: contextMenuItem
+                // text 在 onAboutToShow / 初始化时同步，下面 initialBinding 同步
+                // 一次后由 toggle 维护
+                text: qsTr("上下文记忆：") + (root.contextEnabled ? qsTr("开") : qsTr("关"))
+                enabled: bridge !== undefined && bridge !== null
+                onTriggered: {
+                    if (!bridge) return
+                    var next = !root.contextEnabled
+                    if (bridge.set_enable_context(next)) {
+                        root.contextEnabled = next
+                        bridge.toast("上下文记忆已" + (next ? "开启" : "关闭") +
+                                     "（最近 50 条消息将随提问发送给模型）")
+                    }
+                }
+            }
         }
         Menu {
             id: toolsMenu
@@ -330,6 +350,10 @@ ApplicationWindow {
 
     // 主题切换：light / dark
     property string themeName: bridge ? bridge.get_theme() : "light"
+
+    // Day 20.6.22: 上下文记忆开关。启动时从 bridge.get_preferences() 同步一次；
+    // 菜单切换时立即更新；新对话不重置（与 enable_thinking 同模式）。
+    property bool contextEnabled: bridge ? !!bridge.get_preferences().enable_context : true
 
     color: themeName === "dark" ? "#0E0F12" : "#F8F9FB"
 

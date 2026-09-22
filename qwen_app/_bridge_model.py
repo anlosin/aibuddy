@@ -58,9 +58,11 @@ class ModelMixin(object):
         """Day 10: 返回当前模型名称（QML 顶栏显示用）"""
         return self._last_model_name or "(未选择)"
 
-    @pyqtSlot(bool, bool, result=bool)
-    def set_preferences(self, enable_thinking: bool, enable_tools: bool) -> bool:
+    @pyqtSlot(bool, bool, bool, result=bool)
+    def set_preferences(self, enable_thinking: bool, enable_tools: bool,
+                        enable_context: bool) -> bool:
         """Day 19 (M-NEW-5 修复): 写全局偏好到 cfg 顶层 + 立即生效。
+        Day 20.6.22: 增加 enable_context 参数 —— 「上下文记忆」开关。
 
         QML 端「偏好设置」对话框（Main.qml）保存时调此 slot。
         成功返回 True，失败返回 False。
@@ -69,10 +71,12 @@ class ModelMixin(object):
             cfg = _config.load_config()
             cfg["enable_thinking"] = bool(enable_thinking)
             cfg["enable_tools"] = bool(enable_tools)
+            cfg["enable_context"] = bool(enable_context)
             _config.save_config(cfg)
             # 立即更新 self，下次 start_real_chat 生效
             self._enable_thinking = bool(enable_thinking)
             self._enable_tools = bool(enable_tools)
+            self._enable_context = bool(enable_context)
             return True
         except Exception as e:
             print(f"[chat_bridge] set_preferences 失败: {e}")
@@ -80,11 +84,33 @@ class ModelMixin(object):
 
     @pyqtSlot(result='QVariantMap')
     def get_preferences(self):
-        """返回当前全局偏好（QML 端读后渲染设置对话框的勾选状态）。"""
+        """返回当前全局偏好（QML 端读后渲染设置对话框的勾选状态）。
+
+        Day 20.6.22: 新增 enable_context 字段；旧 QtQuick 调用方可能未传，
+        QML 端 get_preferences() 总能读到完整三项。
+        """
         return {
             "enable_thinking": getattr(self, "_enable_thinking", False),
             "enable_tools": getattr(self, "_enable_tools", True),
+            "enable_context": getattr(self, "_enable_context", True),
         }
+
+    @pyqtSlot(bool, result=bool)
+    def set_enable_context(self, enable: bool) -> bool:
+        """Day 20.6.22: 单独切换上下文记忆（独立 slot，便于菜单快捷切换）。
+
+        QML 端偏好设置 / 工具栏按钮可单独调本方法，不必走三参 set_preferences。
+        持久化到 cfg["enable_context"]；QML 端 get_preferences() 刷新读到最新值。
+        """
+        try:
+            cfg = _config.load_config()
+            cfg["enable_context"] = bool(enable)
+            _config.save_config(cfg)
+            self._enable_context = bool(enable)
+            return True
+        except Exception as e:
+            print(f"[chat_bridge] set_enable_context 失败: {e}")
+            return False
 
     def _apply_expert(self, expert_id: str) -> bool:
         """Day 20.6.15: 专家切换的**统一入口**（选中态三件套）：

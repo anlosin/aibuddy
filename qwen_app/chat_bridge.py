@@ -148,13 +148,22 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
             pass
         # Day 19: 全局偏好（enable_thinking / enable_tools）从 cfg 顶层读
         # 不绑在 model dict 上 —— 与 chat_window._load_settings 一致
+        # Day 20.6.22: 补 enable_context —— 「上下文记忆」开关（持久化键同模式）。
+        # 历史会话在 send_message 时拼进 messages，关闭后回退单轮对话（仅 user
+        # 一条），与 chat_window 的 enable_context 同语义但 QtQuick 路径之前完全
+        # 没暴露这个开关 → 用户从备用窗口迁过来感觉「开关没了 / 上下文不发了」。
         try:
             _cfg_full = _cfg.load_config()
             self._enable_thinking = bool(_cfg_full.get("enable_thinking", False))
             self._enable_tools = bool(_cfg_full.get("enable_tools", True))
+            self._enable_context = bool(_cfg_full.get("enable_context", True))
         except Exception:
             self._enable_thinking = False
             self._enable_tools = True
+            self._enable_context = True
+        # 历史消息发送上限（Day 20.6.22）：与 compressor.COMPRESS_THRESHOLD=20
+        # 同数量级，再加 30 条缓冲。任务级 auto 任务不要被打扰，沿用 50。
+        self._context_history_limit = 50
         # Day 19 (C-NEW-3 修复): 当前激活的专家（默认 "general"）。
         # 用户在 QML 端通过 set_expert 切换；/dev 前缀路由会临时改。
         # Day 20.6.15: 从 cfg 读持久化值（与 chat_window._load_current_expert
