@@ -91,17 +91,34 @@ Rectangle {
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 8
-            // 标题（工具名 / 角色）
-            Text {
+            // 标题 / 正文（AI 回复 / 用户消息 / 工具名）
+            // Day 20.6.22 修复 "无法选中复制一小部分对话内容"：原来用 Text
+            // （只读控件，selectable 永远 false），用户拖蓝 / 双击 / Ctrl+C
+            // 全部失效 —— 只能整条气泡「复制」（走三点菜单的 copy_to_clipboard）。
+            // 改为 TextEdit + readOnly + selectByMouse + selectByKeyboard +
+            // persistentSelection：行为等价于可选中不可编辑，鼠标拖蓝高亮、
+            // Ctrl+C 复制都正常。TextEdit 的 contentHeight 自动撑出 implicitHeight
+            // 给 ColumnLayout 用，不会破布局。
+            // 三点菜单的「复制」项仍走整条 copy_to_clipboard（不冲突）。
+            TextEdit {
+                id: bodyText
                 visible: bubble.text.length > 0
                 text: bubble.text
                 color: bubble.textColor
                 font.pixelSize: bubble.isTool ? 14 : 15
                 font.family: "Microsoft YaHei"
                 font.bold: bubble.isTool
-                wrapMode: Text.Wrap
+                wrapMode: TextEdit.Wrap
                 Layout.fillWidth: true
-                textFormat: bubble.isTool ? Text.PlainText : Text.RichText
+                textFormat: bubble.isTool ? TextEdit.PlainText : TextEdit.RichText
+                readOnly: true
+                selectByMouse: true
+                selectByKeyboard: true
+                persistentSelection: true
+                // 不显示光标闪烁（已读的角色用 TextEdit 只想借它的可选中能力）
+                cursorVisible: false
+                // 不参与 Tab 焦点链（避免误触）
+                activeFocusOnTab: false
             }
             // 参数 / 结果（code 字段）
             Rectangle {
@@ -110,7 +127,7 @@ Rectangle {
                 radius: 8
                 color: bubble.codeBg
                 implicitHeight: codeText.implicitHeight + 16
-                Text {
+                TextEdit {
                     id: codeText
                     anchors.fill: parent
                     anchors.margins: 8
@@ -118,8 +135,14 @@ Rectangle {
                     color: bubble.codeFg
                     font.family: bubble.isTool ? "Consolas, Courier New, monospace" : "Microsoft YaHei"
                     font.pixelSize: bubble.isTool ? 12 : 13
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
+                    wrapMode: TextEdit.Wrap
+                    textFormat: TextEdit.PlainText
+                    readOnly: true
+                    selectByMouse: true
+                    selectByKeyboard: true
+                    persistentSelection: true
+                    cursorVisible: false
+                    activeFocusOnTab: false
                 }
             }
         }
