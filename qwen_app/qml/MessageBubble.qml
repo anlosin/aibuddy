@@ -48,8 +48,24 @@ Rectangle {
     //   实测：把 implicitWidth 解耦成常量后警告消失（stderr 干净）。
     //   气泡实际宽度由调用方的 Layout.preferredWidth 决定，这里只提供稳定的
     //   implicit 尺寸，因此用常量属性而不是从 contentRow 反推最稳妥。
+    //
+    // Day 20.10.10 修复 "超长输入（无空格长串 / URL / 连续英数）气泡右侧超出屏幕"：
+    //   之前 preferredWidth 是硬编码 680，父 Layout.preferredWidth 也写死 680，
+    //   没有 maximumWidth —— 在窄屏（窗口 < 680+padding）下气泡右边会被截断；
+    //   在宽屏上 bodyText 的 TextEdit 也会因为没有宽度上限按 wrapMode 折行。
+    //   这里拆成 preferredWidth（理想宽度）+ maximumWidth（父可用宽度上限）：
+    //   - preferredWidth 仍 680，给 RowLayout 计算行高 / 气泡最大自然尺寸
+    //   - maximumWidth 由父 QML 显式赋值 = 父 Layout 可用宽度（窗口 - 侧边栏 - 间距）
+    //   - 实际 width = min(preferredWidth, maximumWidth)，窄屏自动收缩
+    //   - 父容器同时去掉硬编码 Layout.preferredWidth: 680，改用 Layout.maximumWidth 传下来
     property int preferredWidth: 680
+    // 最大宽度（默认 0 = 无上限）；父 QML 必须在赋值 Layout.preferredWidth 之前
+    // 先给 bubble.maximumWidth 赋值，否则窄屏下 bubble 仍按 preferredWidth=680
+    // 撑开导致右侧超出。父 QML 见 Main.qml RowLayout 段（约 1292-1320）。
+    property int maximumWidth: 0
     implicitWidth: preferredWidth
+    // 实际宽度：上限取 min(preferredWidth, maximumWidth)；maximumWidth=0 表示无约束
+    width: maximumWidth > 0 ? Math.min(preferredWidth, maximumWidth) : preferredWidth
     implicitHeight: contentRow.implicitHeight + 24
 
     // 真阴影（叠层 Rectangle 模拟，GPU 渲染柔和）
@@ -100,6 +116,16 @@ Rectangle {
             // Ctrl+C 复制都正常。TextEdit 的 contentHeight 自动撑出 implicitHeight
             // 给 ColumnLayout 用，不会破布局。
             // 三点菜单的「复制」项仍走整条 copy_to_clipboard（不冲突）。
+            //
+            // Day 20.10.10 修复 "超长无空格串 / URL / 连续英数"：
+            //   wrapMode=Wrap 默认只在空白 / 标点处折行，遇到 'aaaaaa...'、
+            //   完整 URL、长 base64 会一直撑宽直到撞到 Layout.maximumWidth。
+            //   之前 bubble.preferredWidth=680 写死 + 父 Layout.preferredWidth
+            //   也写死 680，窄屏下宽度直接超出右侧屏幕可见区。修复两点：
+            //   1) bubble 设 Layout.maximumWidth = parent 可用宽度（窄屏自动收缩）
+            //   2) bodyText 用 TextEdit.WrapAnywhere —— 即使没有任何空白 / 标点，
+            //      也能在字符边界强制折行（中文被汉字宽度天然拆，英文长串也折）
+            //   保留 selectByMouse 等四件套不动（用户仍可选中复制）。
             TextEdit {
                 id: bodyText
                 visible: bubble.text.length > 0
@@ -108,8 +134,12 @@ Rectangle {
                 font.pixelSize: bubble.isTool ? 14 : 15
                 font.family: "Microsoft YaHei"
                 font.bold: bubble.isTool
-                wrapMode: TextEdit.Wrap
+                // WrapAnywhere：字符边界强制折行，避免 'aaaa...' / 长 URL / 长 base64 溢出
+                wrapMode: TextEdit.WrapAnywhere
                 Layout.fillWidth: true
+                Layout.preferredWidth: 0     // 占满 fillWidth 而非固定数值
+                // 内容宽度跟随 bubble 的实际 width（去掉头像 32 + 间距 10 + 内边距 24）
+                // —— 用 Layout.fillWidth 即可，Qt 会自动撑到 ColumnLayout 的宽度
                 textFormat: bubble.isTool ? TextEdit.PlainText : TextEdit.RichText
                 readOnly: true
                 selectByMouse: true
@@ -135,7 +165,10 @@ Rectangle {
                     color: bubble.codeFg
                     font.family: bubble.isTool ? "Consolas, Courier New, monospace" : "Microsoft YaHei"
                     font.pixelSize: bubble.isTool ? 12 : 13
-                    wrapMode: TextEdit.Wrap
+                    // Day 20.10.10: 同 bodyText —— WrapAnywhere 防长 JSON / 长 URL /
+                    // 长 base64 顶到 bubble 宽度之外。锚点 anchors.fill 让 TextEdit
+                    // 实际宽度 = Rectangle 实际宽度（受 bubble.width 控制）。
+                    wrapMode: TextEdit.WrapAnywhere
                     textFormat: TextEdit.PlainText
                     readOnly: true
                     selectByMouse: true

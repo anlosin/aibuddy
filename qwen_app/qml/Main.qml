@@ -655,6 +655,22 @@ ApplicationWindow {
                 }
             }
         }
+        // Day 20.10.10: 模型注册表变更（添加 / 编辑 / 删除）→ 主界面
+        // modelCombo 重拉并回写 currentIndex。根因复现：之前 modelCombo
+        // 只在初始化或 currentIndex 计算时拉一次 list_models()，保存新
+        // 模型后磁盘已更新但 UI 下拉不变。修复与 onExpertChanged 同模板
+        // —— 只重拉 model 不够，currentIndex 必须显式回写。
+        function onModelsChanged() {
+            modelCombo.model = bridge ? bridge.list_models() : []
+            var ms = modelCombo.model
+            for (var i = 0; i < ms.length; i++) {
+                if (ms[i].current) {
+                    modelCombo.currentIndex = i
+                    return
+                }
+            }
+            modelCombo.currentIndex = ms.length > 0 ? 0 : -1
+        }
     }
 
     // ============ Day 12: 全局快捷键 ============
@@ -1304,6 +1320,19 @@ ApplicationWindow {
                                 // who="ai" / text="" / hasCode=false。
                                 // 现象：所有气泡都渲染成 AI 白气泡，且正文一个字都没有。
                                 // 对照：`text: ts` 没事，因为 Text 没有 ts 属性。
+                                //
+                                // Day 20.10.10 修复 "超长无空格串 / URL 气泡超出屏幕"：
+                                //   之前 Layout.preferredWidth: 680 硬编码，窄屏
+                                //   （窗口 < 680+padding）下 bubble 右侧溢出屏幕。
+                                //   这里改用 Layout.maximumWidth: msgRow.width 告诉
+                                //   bubble「最多撑到父容器宽」，由 MessageBubble 内部
+                                //   width = min(preferredWidth=680, maximumWidth)。
+                                //   父容器（RowLayout）Layout.fillWidth=true 会让
+                                //   msgRow.width = ListView delegate width = 整个消息区，
+                                //   保证窄屏时气泡收窄。同时给 Layout.alignment
+                                //   区分 user/ai 两端对齐（user 右、ai 左）。preferredWidth
+                                //   仍给 680 —— 当父容器宽度 > 680 时气泡自然取 680，
+                                //   不无限放大（避免大屏一行只放半个句子的观感）。
                                 MessageBubble {
                                     who: model.who
                                     text: model.text
@@ -1312,6 +1341,16 @@ ApplicationWindow {
                                     // Day 20: 注入 ListView.index（delegate 上下文属性）到气泡
                                     msgIndex: index
                                     Layout.preferredWidth: 680
+                                    Layout.maximumWidth: msgRow.width > 0 ? msgRow.width : 680
+                                    // Day 20.10.10: 把父可用宽度注入到 bubble 的 maximumWidth
+                                    // —— 这是真正的「窄屏收缩」开关。Layout.maximumWidth
+                                    // 是约束，bubble.maximumWidth 是内部属性，需双向传递。
+                                    // 传 Math.min(msgRow.width, 680) 让 bubble 在宽屏下
+                                    // 也不无限拉宽。
+                                    maximumWidth: Math.min(
+                                        msgRow.width > 0 ? msgRow.width : 680,
+                                        680
+                                    )
                                 }
                                 Item {
                                     Layout.fillWidth: who === "ai"

@@ -54,6 +54,7 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
     sessionListChanged = pyqtSignal()                            # 会话列表变化（QML 重拉）
     sessionLoaded = pyqtSignal(str, 'QVariantList')              # conv_id, history list
     currentModelNameChanged = pyqtSignal(str)                   # Day 10: 切换模型名名发生变化
+    modelsChanged = pyqtSignal()                                # Day 20.10.10: 模型注册表变更（添加/编辑/删除）→ QML 主界面 ComboBox 立即重拉
     expertChanged = pyqtSignal(str)                             # Day 20.6.15: 当前专家变化（下拉切换 / /dev 前缀路由），QML 下拉框跟随
     # Day 11: 工具调用（Day 19.1 修订：toolCallResult 3 参数触发 QTBUG-94360
     # 栈越界 —— QML Connections 监听 ≥3 参数信号会在启动期随机 0xC0000005。

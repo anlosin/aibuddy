@@ -14,6 +14,14 @@ from . import config as _config
 from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
 
 
+def _new_model_id():
+    """Day 20.10.10: 与 config._new_model_id 同实现，避免循环 import；
+    之前 model id 都由 config._new_model_id 生成（time + 随机后缀）。"""
+    import time as _t
+    import random as _r
+    return "m_%d_%04x" % (int(_t.time() * 1000), _r.getrandbits(16))
+
+
 class ModelMixin(object):
     """模型切换 / 偏好读写 / 专家切换 / 文件大小与文本读取 slot。"""
 
@@ -57,6 +65,160 @@ class ModelMixin(object):
     def get_current_model_name(self) -> str:
         """Day 10: 返回当前模型名称（QML 顶栏显示用）"""
         return self._last_model_name or "(未选择)"
+
+    @pyqtSlot(str, str, str, str, str, bool, result=bool)
+    def add_model(self, name: str, base_url: str, api_key: str,
+                  model_id: str, proxy: str, as_current: bool) -> bool:
+        """Day 20.10.10: 添加新模型（QML 端「添加模型」对话框调用）。
+
+        写盘 → emit modelsChanged → 若 as_current=True 或空表自动设激活，
+        同步更新 _last_model_name 并 emit currentModelNameChanged。
+        返回 True 表示成功。
+        """
+        base_url = (base_url or "").strip()
+        model_id = (model_id or "").strip()
+        if not base_url or not model_id:
+            return False
+        try:
+            models, cur = _config.load_models()
+        except Exception as e:
+            print(f"[chat_bridge] add_model 读 models 失败: {e}")
+            return False
+        new_m = {
+            "id": _new_model_id(),
+            "name": (name or "").strip() or model_id,
+            "base_url": base_url,
+            "api_key": (api_key or "").strip(),
+            "model_id": model_id,
+            "proxy": (proxy or "").strip(),
+        }
+        models.append(new_m)
+        # 第一条模型 / 显式要求：自动设为当前
+        if len(models) == 1 or bool(as_current):
+            cur = new_m["id"]
+        try:
+            _config.save_models(models, cur)
+        except Exception as e:
+            print(f"[chat_bridge] add_model 写盘失败: {e}")
+            return False
+        # 若新增并设为当前 → 同步内存中的模型名
+        if cur == new_m["id"]:
+            self._last_model_name = new_m["name"]
+            try:
+                self.currentModelNameChanged.emit(self._last_model_name)
+            except Exception:
+                pass
+        # 通知 QML 端 modelCombo 重拉
+        try:
+            self.modelsChanged.emit()
+        except Exception:
+            pass
+        return True
+
+    @pyqtSlot(str, str, str, str, str, str, result=bool)
+    def update_model(self, target_id: str, name: str, base_url: str,
+                     api_key: str, model_id: str, proxy: str) -> bool:
+        """Day 20.10.10: 编辑已有模型（QML 端「编辑模型」调用）。
+
+        找到 target_id 对应的模型行 → 校验 base_url / model_id 非空 → 更新 →
+        写盘 → emit modelsChanged。若编辑的是当前激活模型，同步更新
+        _last_model_name + emit currentModelNameChanged。
+        """
+        target_id = (target_id or "").strip()
+        if not target_id:
+            return False
+        base_url = (base_url or "").strip()
+        model_id = (model_id or "").strip()
+        if not base_url or not model_id:
+            return False
+        try:
+            models, cur = _config.load_models()
+        except Exception as e:
+            print(f"[chat_bridge] update_model 读 models 失败: {e}")
+            return False
+        target = next((m for m in models if m.get("id") == target_id), None)
+        if not target:
+            return False
+        target["name"] = (name or "").strip() or model_id
+        target["base_url"] = base_url
+        target["api_key"] = (api_key or "").strip()
+        target["model_id"] = model_id
+        target["proxy"] = (proxy or "").strip()
+        try:
+            _config.save_models(models, cur)
+        except Exception as e:
+            print(f"[chat_bridge] update_model 写盘失败: {e}")
+            return False
+        # 改的是当前激活模型 → 同步 _last_model_name + emit
+        if cur == target_id:
+            self._last_model_name = target["name"]
+            try:
+                self.currentModelNameChanged.emit(self._last_model_name)
+            except Exception:
+                pass
+        # 任何编辑都 emit modelsChanged（label / url / id 都可能变）
+        try:
+            self.modelsChanged.emit()
+        except Exception:
+            pass
+        return True
+
+    @pyqtSlot(str, result=bool)
+    def delete_model(self, target_id: str) -> bool:
+        """Day 20.10.10: 删除模型（QML 端「删除模型」调用）。
+
+        至少保留一个模型（与 settings_dialog.on_del 一致）。若删的是当前
+        激活模型，回退到剩余列表的第一个，更新 _last_model_name + emit。
+        """
+        target_id = (target_id or "").strip()
+        if not target_id:
+            return False
+        try:
+            models, cur = _config.load_models()
+        except Exception as e:
+            print(f"[chat_bridge] delete_model 读 models 失败: {e}")
+            return False
+        if len(models) <= 1:
+            return False
+        target = next((m for m in models if m.get("id") == target_id), None)
+        if not target:
+            return False
+        models = [m for m in models if m.get("id") != target_id]
+        # 删的是当前激活 → 回退到剩余的第一个
+        fallback_changed = False
+        if cur == target_id:
+            cur = models[0]["id"]
+            self._last_model_name = models[0].get("name") or models[0].get("model_id", "?")
+            fallback_changed = True
+        try:
+            _config.save_models(models, cur)
+        except Exception as e:
+            print(f"[chat_bridge] delete_model 写盘失败: {e}")
+            return False
+        if fallback_changed:
+            try:
+                self.currentModelNameChanged.emit(self._last_model_name)
+            except Exception:
+                pass
+        try:
+            self.modelsChanged.emit()
+        except Exception:
+            pass
+        return True
+
+    @pyqtSlot(str, result=bool)
+    def notify_models_changed(self, _unused: str = "") -> bool:
+        """Day 20.10.10: 兜底信号入口 —— PyQt5 备用窗口路径在 settings_dialog
+        中写盘后通过 host.bridge 直接 emit modelsChanged。
+
+        提供一个 slot 形式仅为方便从外部代码触发；自身内部直接 emit 也可。
+        这里真正的工作就是 emit modelsChanged（不做任何写盘 —— 写盘由调用方负责）。
+        """
+        try:
+            self.modelsChanged.emit()
+        except Exception:
+            pass
+        return True
 
     @pyqtSlot(bool, bool, bool, result=bool)
     def set_preferences(self, enable_thinking: bool, enable_tools: bool,

@@ -214,6 +214,21 @@ def show_model_manager(window):
     btn_layout.addStretch()
     layout.addLayout(btn_layout)
 
+def _notify_models_changed():
+    """Day 20.10.10: 模型注册表变更后通知 bridge（QtQuick 路径需要刷新主界面下拉）。
+    QtQuick 路径下 window 是 _DialogHost(host._b 才是 ChatBridge)；
+    PyQt5 路径下 window 是 ChatWindow(没有 bridge.modelsChanged)。
+    这里取两者都安全：先尝试 host._b，再 fallback 到 getattr(window, 'bridge', None)。
+    """
+    bridge = getattr(window, "_b", None)  # _DialogHost._b 或 ChatWindow.bridge
+    if bridge is None:
+        bridge = getattr(window, "bridge", None)
+    if bridge is not None and hasattr(bridge, "modelsChanged"):
+        try:
+            bridge.modelsChanged.emit()
+        except Exception:
+            pass
+
     def on_add():
         form, get_values = _model_edit_form(window, dlg)
         e = QDialog(dlg); e.setWindowTitle("添加模型"); e.resize(460, 300)
@@ -234,6 +249,8 @@ def show_model_manager(window):
         save_models(models, cur)
         window.current_model_id = cur
         refresh_list(cur)
+        # Day 20.10.10: 通知 QtQuick 端 modelCombo 重拉列表
+        _notify_models_changed()
 
     def on_edit():
         mid = selected_id()
@@ -261,6 +278,8 @@ def show_model_manager(window):
         if mid == cur:
             _apply_to_window(window, target)
         refresh_list(cur)
+        # Day 20.10.10: 通知 QtQuick 端 modelCombo 重拉列表
+        _notify_models_changed()
 
     def on_test():
         mid = selected_id()
@@ -299,6 +318,8 @@ def show_model_manager(window):
         save_models(models, cur)
         window.current_model_id = cur
         refresh_list(cur)
+        # Day 20.10.10: 通知 QtQuick 端 modelCombo 重拉列表
+        _notify_models_changed()
 
     def on_use():
         mid = selected_id()
@@ -313,6 +334,10 @@ def show_model_manager(window):
             save_models(models, mid)
             window.switch_model(mid)
         refresh_list(mid)
+        # Day 20.10.10: 「设为当前」也算注册表变化 → emit 一下让 modelCombo
+        # 重拉（其实 set_current_model 已经 emit currentModelNameChanged，
+        # 但 currentIndex 的绑定仍依赖 list_models 的 current 字段，也重拉一次保险）
+        _notify_models_changed()
 
     btn_add.clicked.connect(on_add)
     btn_edit.clicked.connect(on_edit)
