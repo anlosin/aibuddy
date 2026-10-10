@@ -89,10 +89,17 @@ class TestMessageBubbleSelectable(unittest.TestCase):
                              f"bodyText.{kw} 必须 {want}，当前 {m.group(1)!r}")
 
     def test_body_text_format_richtext(self):
-        """AI/用户消息必须 RichText 渲染（markdown）"""
+        """bodyText.textFormat 必须含 RichText（ai 气泡走 RichText 渲染 markdown）；
+        user 气泡走 PlainText（避免 XML/HTML 源码被 RichText 解析导致宽度估算异常，
+        见 Day 20.10.10 二次修复 + tests/test_day20_10_10_bugfix_user_plain_text.py）。
+        """
         block = _find_block_for_id(self.code, "bodyText")
-        self.assertRegex(block, r"textFormat:[^\n]*RichText",
-                         "AI/用户消息必须 TextEdit.RichText（保留 markdown 渲染）")
+        # 整体表达式必须含 RichText（ai 分支）
+        self.assertIn("RichText", block,
+                      "ai 气泡必须保留 TextEdit.RichText（markdown 渲染）")
+        # user 走 PlainText（防 XML/HTML 宽度估算异常）
+        self.assertIn("isUser", block,
+                      "user 气泡必须走 PlainText 分支（见 Day 20.10.10 修复）")
 
     def test_code_block_found_and_uses_textedit(self):
         """codeText 控件必须存在且为 TextEdit"""

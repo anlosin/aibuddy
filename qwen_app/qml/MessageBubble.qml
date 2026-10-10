@@ -126,6 +126,20 @@ Rectangle {
             //   2) bodyText 用 TextEdit.WrapAnywhere —— 即使没有任何空白 / 标点，
             //      也能在字符边界强制折行（中文被汉字宽度天然拆，英文长串也折）
             //   保留 selectByMouse 等四件套不动（用户仍可选中复制）。
+            //
+            // Day 20.10.10 二次修复 "user 气泡内 XML/URL 仍然溢出（截图复现）"：
+            //   实测（offscreen 加载 MessageBubble + 200 字符 XML + 720px ListView 宽）：
+            //     - textFormat: RichText 时 TextEdit.paintedHeight=17（1 行）
+            //       原因：Qt 把 '<' '>' 当 HTML 标签边界做宽度估算，XML/HTML 源码
+            //       里有大量 '<' '>'，RichText 模式把这些字符的"可视宽度"算成 0，
+            //       导致 implicitWidth 估算偏小，WrapAnywhere 误判为能装下而不折行。
+            //     - textFormat: PlainText 时 paintedHeight=120（~7 行）—— 正确
+            //   修复：user 气泡 + tool_call/tool_result 都改 PlainText（这些类型的
+            //   内容本来就是字面文本，user 发的 XML/URL/YAML 不会走 markdown 渲染）；
+            //   ai 气泡保留 RichText（流式累积阶段虽然也是 raw markdown，但
+            //   response_complete 时 _flush_stream_buffer 会 emit messageReplaced
+            //   触发 chat_render.markdown_to_html 替换为渲染好的 HTML 字符串，
+            //   真正显示给用户的是渲染版 RichText 没问题）。
             TextEdit {
                 id: bodyText
                 visible: bubble.text.length > 0
@@ -140,7 +154,12 @@ Rectangle {
                 Layout.preferredWidth: 0     // 占满 fillWidth 而非固定数值
                 // 内容宽度跟随 bubble 的实际 width（去掉头像 32 + 间距 10 + 内边距 24）
                 // —— 用 Layout.fillWidth 即可，Qt 会自动撑到 ColumnLayout 的宽度
-                textFormat: bubble.isTool ? TextEdit.PlainText : TextEdit.RichText
+                // textFormat 决定宽度估算：user/tool 用 PlainText（字面宽度，
+                // XML/HTML 源码按字符折行），ai 保留 RichText（markdown 渲染在
+                // response_complete 时已转 HTML，这里只承担渲染态显示）。
+                textFormat: (bubble.isTool || bubble.isUser)
+                    ? TextEdit.PlainText
+                    : TextEdit.RichText
                 readOnly: true
                 selectByMouse: true
                 selectByKeyboard: true
