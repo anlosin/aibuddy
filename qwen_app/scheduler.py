@@ -20,6 +20,7 @@ import os
 import re
 import json
 import uuid
+import shutil
 import threading
 from datetime import datetime, timedelta
 
@@ -50,15 +51,47 @@ RUNS_INDEX_CAP = 300  # automation_runs.json 最多保留记录数
 # ═════════════════════════════════════════
 
 def load_automations():
-    """读取任务定义列表，文件不存在时返回空列表"""
+    """读取任务定义列表，文件不存在时返回空列表。
+
+    Day 20.10.13 B4 护栏：未来如果再发生"任务消失"事故（磁盘被外部清空 / 升级
+    脚本整坏 / 同步冲突覆盖），本函数会按 file 状态分类记录：
+    - 文件不存在 → 直接返回 []（首次启动 / 被外部 rm，正常情况）
+    - 文件存在但 JSON 损坏（json.JSONDecodeError 等）→ 记录 ERROR，
+      同时保留一份 corrupted copy 到 *.corrupted-<ts> 便于事后溯源；
+      再返回 [] 让 GUI 还能弹出"暂无任务"提示，避免悄悄吃数据。
+    - 文件存在但内容非 list（如 dict / str / null）→ 记录 WARNING；
+      返回 []（schema 不对也算软失败）
+
+    核心目的：把"disk 数据丢失"和"code 加载路径异常"两类故障在日志里分清楚，
+    避免又花 18 分钟做根因分析。
+    """
     if not os.path.exists(AUTOMATIONS_FILE):
         return []
     try:
         with open(AUTOMATIONS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        # must-log-ERROR: 数据损坏 → 留备份 + 报错 + 返回 []
+        logger.error(
+            "[Scheduler] automations.json 解析失败（数据损坏？！）: %s: %s",
+            type(e).__name__, e,
+        )
+        # 备份原文以便事后能还原（磁盘问题 vs 代码问题一目了然）
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = AUTOMATIONS_FILE + f".corrupted-{ts}"
+            shutil.copy2(AUTOMATIONS_FILE, backup)
+            logger.error("[Scheduler] 损坏内容已备份到: %s", backup)
+        except Exception as backup_err:
+            logger.warning("[Scheduler] 损坏内容备份失败: %s", backup_err)
         return []
+    if not isinstance(data, list):
+        logger.warning(
+            "[Scheduler] automations.json 顶层不是 list（type=%s），当作空任务处理",
+            type(data).__name__,
+        )
+        return []
+    return data
 
 
 def save_automations(automations):

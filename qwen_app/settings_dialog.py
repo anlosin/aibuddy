@@ -214,20 +214,25 @@ def show_model_manager(window):
     btn_layout.addStretch()
     layout.addLayout(btn_layout)
 
-def _notify_models_changed():
-    """Day 20.10.10: 模型注册表变更后通知 bridge（QtQuick 路径需要刷新主界面下拉）。
-    QtQuick 路径下 window 是 _DialogHost(host._b 才是 ChatBridge)；
-    PyQt5 路径下 window 是 ChatWindow(没有 bridge.modelsChanged)。
-    这里取两者都安全：先尝试 host._b，再 fallback 到 getattr(window, 'bridge', None)。
-    """
-    bridge = getattr(window, "_b", None)  # _DialogHost._b 或 ChatWindow.bridge
-    if bridge is None:
-        bridge = getattr(window, "bridge", None)
-    if bridge is not None and hasattr(bridge, "modelsChanged"):
-        try:
-            bridge.modelsChanged.emit()
-        except Exception:
-            pass
+    # Day 20.10.13 B3 修复：把 _notify_models_changed 改成 show_model_manager 的闭包，
+    # 闭包内闭包变量 `window` 由形参提供，避免模块级函数引用未定义变量 NameError。
+    # 修前的 bug：原模块级 def _notify_models_changed()：... 因函数体内 free var
+    # `window` 在模块层不存在 → on_add/on_edit/on_del/on_use 调它时抛
+    # `NameError: name 'window' is not defined`，导致 4 个 callback 全部静默失效。
+    def _notify_models_changed():
+        """Day 20.10.10: 模型注册表变更后通知 bridge（QtQuick 路径需要刷新主界面下拉）。
+        QtQuick 路径下 window 是 _DialogHost（host._b 才是 ChatBridge）；
+        PyQt5 路径下 window 是 ChatWindow（没有 bridge.modelsChanged）。
+        这里取两者都安全：先尝试 host._b，再 fallback 到 getattr(window, 'bridge', None)。
+        """
+        bridge = getattr(window, "_b", None)  # _DialogHost._b 或 ChatWindow.bridge
+        if bridge is None:
+            bridge = getattr(window, "bridge", None)
+        if bridge is not None and hasattr(bridge, "modelsChanged"):
+            try:
+                bridge.modelsChanged.emit()
+            except Exception:
+                pass
 
     def on_add():
         form, get_values = _model_edit_form(window, dlg)
