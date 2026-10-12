@@ -9,6 +9,7 @@ macOS Keychain / Linux Secret Service），重启后无需重输；keyring
 4. 同 account 再次 set 视为覆盖（修改密码场景）
 5. 进程退出时内存缓存自动消失（无需清理）
 """
+import logging
 import threading
 import traceback
 
@@ -16,6 +17,8 @@ import traceback
 # 进程内内存降级缓存：keyring 不可用时暂存
 _FALLBACK = {}
 _FALLBACK_LOCK = threading.Lock()
+# Day 20.10.10 P1+P2: 用 stdlib logger 替代 print（首次探测日志留痕）
+logger = logging.getLogger("qwen_app.plugins._secret_store")
 
 # 探测一次 keyring 是否可用 + 后端类型
 _AVAILABLE = None
@@ -43,7 +46,8 @@ def _probe():
         _AVAILABLE = False
         _BACKEND = f"unavailable: {type(e).__name__}: {e}"
         # 只在首次探测时打印一次，避免每个工具调用都刷屏
-        print(f"[SecretStore] keyring 不可用，启用内存降级缓存: {_BACKEND}")
+        # Day 20.10.10 P1+P2: 走 logger（warn 级 —— 不可用是有用信息）
+        logger.warning("[SecretStore] keyring 不可用，启用内存降级缓存: %s", _BACKEND)
 
 
 def is_available():

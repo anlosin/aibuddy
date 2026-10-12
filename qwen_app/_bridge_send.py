@@ -12,6 +12,9 @@ from PyQt5.QtCore import pyqtSlot
 
 from . import config as _config
 from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.bridge.send")
 
 
 class SendMixin(object):
@@ -124,7 +127,7 @@ class SendMixin(object):
         for path in image_paths:
             # 路径安全检查（与 read_text_file 一致；Day 19 抽到 _safe_path）
             if not is_safe_to_read(path):
-                print(f"[chat_bridge] 图片路径拒绝（绝对路径）: {path}")
+                logger.warning("图片路径拒绝（绝对路径）: %s", path)
                 continue
             lower = path.lower()
             ext = None
@@ -133,20 +136,20 @@ class SendMixin(object):
                     ext = e
                     break
             if ext is None:
-                print(f"[chat_bridge] 图片路径拒绝（不在白名单）: {path}")
+                logger.warning("图片路径拒绝（不在白名单）: %s", path)
                 continue
             try:
                 with open(path, "rb") as f:
                     data = f.read()
                 if len(data) > self._MAX_IMAGE_BYTES:
-                    print(f"[chat_bridge] 图片过大跳过 ({len(data)}B): {path}")
+                    logger.warning("图片过大跳过 (%dB): %s", len(data), path)
                     continue
                 import base64
                 b64 = base64.b64encode(data).decode("ascii")
                 mime = self._IMAGE_MIMES[ext]
                 blocks.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             except Exception as e:
-                print(f"[chat_bridge] 图片读取失败 ({path}): {e}")
+                logger.warning("图片读取失败 (%s): %s", path, e)
         return blocks
 
     def _send_user_bubble(self, text: str):
@@ -192,7 +195,8 @@ class SendMixin(object):
                 conv["title"] = (content[:30] + ("..." if len(content) > 30 else "")).strip() or "新对话"
             _config.save_single_conversation(conv, self._current_conv_id)
         except Exception as e:
-            print(f"[chat_bridge] 保存历史失败: {e}")
+            # must-log-ERROR: history 写盘失败 → 用户消息可能丢
+            logger.error("保存历史失败: %s", e)
 
     def _do_regenerate(self, user_text: str):
         """Day 20: 重新生成走 start_real_chat 但跳过 _send_user_bubble

@@ -1,4 +1,5 @@
 """网页搜索技能 —— 四重回退策略（Bing 首选，国内直连可达）"""
+import logging
 import urllib.request
 import urllib.parse
 
@@ -39,6 +40,10 @@ TOOLS = [
         }
     }
 ]
+
+
+# Day 20.10.10 P1+P2: 用 stdlib logger 替代 print
+logger = logging.getLogger("qwen_app.plugins.web_search")
 
 
 # ── 策略1：Bing 网页抓取（国内直连可达，首选） ──
@@ -89,7 +94,7 @@ def _search_via_bing(query, max_results=5):
             return "\n\n".join(lines)
         return None
     except Exception as e:
-        print(f"[web_search] Bing 搜索错误: {e}")
+        logger.warning("[web_search] Bing 搜索错误: %s", e)
         return None
 
 
@@ -124,7 +129,7 @@ def _search_via_library(query, max_results=5):
     except ImportError:
         return None  # 回退到策略2
     except Exception as e:
-        print(f"[web_search] 库搜索错误: {e}")
+        logger.warning("[web_search] 库搜索错误: %s", e)
         return None
 
 
@@ -184,7 +189,7 @@ def _search_via_api(query, max_results=5):
         return "\n\n".join(lines)
 
     except Exception as e:
-        print(f"[web_search] API 错误: {e}")
+        logger.warning("[web_search] API 错误: %s", e)
         return None
 
 
@@ -294,7 +299,7 @@ def _search_via_html(query, max_results=5):
         return None
 
     except Exception as e:
-        print(f"[web_search] HTML 抓取错误: {e}")
+        logger.warning("[web_search] HTML 抓取错误: %s", e)
         return None
 
 

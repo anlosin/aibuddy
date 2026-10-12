@@ -7,6 +7,9 @@ import copy
 
 
 from . import paths
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.plugin_manager")
 
 
 # 只读资源根（源码态=项目根；打包态=_MEIPASS）。保留导出以兼容既有调用方。
@@ -132,10 +135,11 @@ def discover_plugins(plugin_dir=None, reload_modules=False):
                     plugins[pname] = mod
                     infos[pname] = getattr(mod, "PLUGIN_INFO")
                 elif getattr(mod, "TOOLS", None):
-                    print(f"插件 {pname} 声明了 TOOLS 但没有可调用的 execute，已跳过"
-                          f"（请检查该插件实现）")
+                    # silent-WARN: 坏插件（声明 TOOLS 但无 execute）→ 用户视角看是"插件神秘消失"
+                    logger.warning("插件 %s 声明了 TOOLS 但没有可调用的 execute，已跳过（请检查该插件实现）", pname)
             except Exception as e:
-                print(f"加载插件 {pname} 失败: {e}")
+                # silent-WARN: 单个插件加载失败不影响其它插件
+                logger.warning("加载插件 %s 失败: %s", pname, e)
     return plugins, infos
 
 
@@ -205,10 +209,8 @@ def dispatch_tool(plugins, enabled_names, tool_name, arguments):
                 try:
                     return fn(tool_name, arguments)
                 except Exception as e:          # noqa: BLE001 — 兜底必须抓全部
-                    import traceback
-                    print(f"[plugin_manager] 工具 {tool_name}（插件 {name}）执行异常: {e}",
-                          file=sys.stderr, flush=True)
-                    traceback.print_exc()
+                    # must-log-ERROR: 插件工具调用异常 → 用户/QA 必须能看到（之前仅 stderr，CI 不收集）
+                    logger.exception("工具 %s（插件 %s）执行异常", tool_name, name)
                     return f"工具 {tool_name} 执行失败: {type(e).__name__}: {e}"
     return f"未知工具: {tool_name}"
 

@@ -10,6 +10,10 @@ import os
 
 from PyQt5.QtCore import QTimer, QFileSystemWatcher, pyqtSlot
 
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.bridge.plugin")
+
 
 class PluginMixin(object):
     """插件相关方法：watcher 生命周期 + 发现 / 重载 / 已启用名单。"""
@@ -32,7 +36,8 @@ class PluginMixin(object):
             self._plugin_watcher = QFileSystemWatcher([ext])
             self._plugin_watcher.directoryChanged.connect(self._on_plugin_dir_changed)
         except Exception as e:
-            print(f"[chat_bridge] 初始化 plugin watcher 失败: {e}")
+            # silent-WARN: 监听器初始化失败常见（Qt 系统调用），主流程可继续
+            logger.warning("初始化 plugin watcher 失败: %s", e)
 
     @pyqtSlot()
     def enable_plugin_watcher(self):
@@ -63,7 +68,7 @@ class PluginMixin(object):
             plugins, _ = plugin_manager.discover_plugins()
             return plugins
         except Exception as e:
-            print(f"[chat_bridge] discover_plugins 失败: {e}")
+            logger.warning("discover_plugins 失败: %s", e)
             return {}
 
     @pyqtSlot()
@@ -98,7 +103,7 @@ class PluginMixin(object):
             self.pluginReloaded.emit(len(plugins))
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
-            print(f"[chat_bridge] 插件热更新失败: {err}")
+            logger.warning("插件热更新失败: %s", err)
             self.pluginReloadFailed.emit(err)
 
     def _enabled_plugin_names(self) -> list:

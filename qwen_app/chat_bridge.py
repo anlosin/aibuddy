@@ -37,6 +37,9 @@ from ._bridge_model import ModelMixin  # 拆分 Step 4: 模型/偏好/专家/文
 from ._bridge_send import SendMixin  # 拆分 Step 5: 发送/系统提示词/历史方法
 from ._bridge_stream import StreamMixin, LegacyMockMixin  # 拆分 Step 6: 流式/legacy mock 方法
 from ._bridge_menu import MenuMixin  # 拆分 Step 7: 菜单/对话框入口方法
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.chat_bridge")
 
 
 class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
@@ -231,7 +234,8 @@ class ChatBridge(PluginMixin, SessionMixin, BubbleMixin, ModelMixin, SendMixin,
                 cfg["theme"] = name
                 _cfg.save_config(cfg)
             except Exception as e:
-                print(f"[chat_bridge] 持久化 theme 失败: {e}")
+                # silent-WARN: 持久化失败不影响主题切换生效，仅提示排查
+                logger.warning("[chat_bridge] 持久化 theme 失败: %s", e)
             self.themeChanged.emit(name)
 
     @pyqtSlot(result=str)

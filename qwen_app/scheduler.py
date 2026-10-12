@@ -30,6 +30,9 @@ from .plugin_manager import get_enabled_tools
 from .config import load_models, make_openai_client
 
 from . import paths
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.scheduler")
 
 # 只读资源根（源码态=项目根；打包态=_MEIPASS）
 PROJECT_ROOT = paths.resource_dir()
@@ -63,7 +66,8 @@ def save_automations(automations):
         with open(AUTOMATIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(automations, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[Scheduler] 保存任务失败: {e}")
+        # must-log-ERROR: 任务定义写盘失败 → 用户配置丢失，必须留痕
+        logger.error("[Scheduler] 保存任务失败: %s", e)
 
 
 def load_runs_index():
@@ -82,7 +86,8 @@ def save_runs_index(index):
         with open(RUNS_FILE, "w", encoding="utf-8") as f:
             json.dump(index[-RUNS_INDEX_CAP:], f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[Scheduler] 保存运行索引失败: {e}")
+        # must-log-ERROR: 运行索引写盘失败 → 历史轨迹丢失
+        logger.error("[Scheduler] 保存运行索引失败: %s", e)
 
 
 # ═════════════════════════════════════════
@@ -178,8 +183,11 @@ def is_due(auto, now):
     try:
         return _is_due_compute(typ, s, last, now)
     except (ValueError, TypeError, KeyError) as e:
-        print(f"[Scheduler] 任务 {auto.get('name', auto.get('id', '?'))} 配置异常，"
-              f"跳过本次触发: {type(e).__name__}: {e}")
+        # silent-WARN: 配置损坏 → 跳过本次触发，但应可见（用户/QA 可看到）
+        logger.warning(
+            "[Scheduler] 任务 %s 配置异常，跳过本次触发: %s: %s",
+            auto.get("name", auto.get("id", "?")), type(e).__name__, e,
+        )
         return False
 
 
@@ -667,6 +675,8 @@ class Scheduler:
             auto["last_error"] = str(e)
             self._save()
             error = str(e)
+            # must-log-ERROR: 任务执行未捕获的异常 → 用户/QA 必须能看到
+            logger.exception("[Scheduler] 任务 %s 执行异常", auto.get("name", aid))
         finally:
             with self._lock:
                 self._running.discard(aid)
@@ -676,6 +686,7 @@ class Scheduler:
                 try:
                     cb(aid, final, error)
                 except Exception:
+                    # silent-OK: 单个回调失败不影响其他回调（GUI 多数已关闭）
                     pass
 
     def _execute(self, auto):
@@ -703,6 +714,7 @@ class Scheduler:
             try:
                 self.on_log(auto.get("name", aid), status)
             except Exception:
+                # silent-OK: 日志回调异常不影响任务本身结果
                 pass
         return final, error
 
@@ -747,7 +759,8 @@ class Scheduler:
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
         except Exception as e:
-            print(f"[Scheduler] 写日志失败: {e}")
+            # must-log-ERROR: 单次执行全文日志写盘失败 → 历史轨迹残缺，必须留痕
+            logger.error("[Scheduler] 写日志失败: %s", e)
             md_path = ""
         # 更新运行索引
         index = load_runs_index()

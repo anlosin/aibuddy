@@ -10,6 +10,9 @@ from PyQt5.QtCore import pyqtSlot
 
 from .settings_dialog import show_settings, show_model_manager, show_plugin_manager  # Day 20.1: QtQuick 调 PyQt5 对话框
 from ._dialog_host import _DialogHost  # Day 20.2: PyQt5 对话框需要 QWidget + 状态，bridge 是 QObject，用 host 适配
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.bridge.menu")
 
 
 class MenuMixin(object):
@@ -35,7 +38,8 @@ class MenuMixin(object):
                 return
             show_settings(host)
         except Exception as e:
-            print(f"[chat_bridge] show_settings 失败: {e}")
+            # silent-WARN: 对话框打开失败 toast 已发
+            logger.warning("show_settings 失败: %s", e)
             self.toast.emit(f"打开设置失败: {e}")
 
     @pyqtSlot()
@@ -48,7 +52,8 @@ class MenuMixin(object):
                 return
             show_plugin_manager(host)
         except Exception as e:
-            print(f"[chat_bridge] show_plugin_manager 失败: {e}")
+            # silent-WARN: 同上
+            logger.warning("show_plugin_manager 失败: %s", e)
             self.toast.emit(f"打开插件管理失败: {e}")
 
     @pyqtSlot()
@@ -61,7 +66,8 @@ class MenuMixin(object):
                 return
             show_model_manager(host)
         except Exception as e:
-            print(f"[chat_bridge] show_model_manager 失败: {e}")
+            # silent-WARN: 同上
+            logger.warning("show_model_manager 失败: %s", e)
             self.toast.emit(f"打开模型管理失败: {e}")
 
     def _get_dialog_host(self):
@@ -94,11 +100,10 @@ class MenuMixin(object):
             # 访问 property 即完成懒构造 + 启动 30s QTimer（_dialog_host.py）
             sch = host.scheduler
             n = len(getattr(sch, "automations", []) or [])
-            print(f"[chat_bridge] 自动化调度器已启动（{n} 个任务，30s 轮询）", flush=True)
+            logger.info("自动化调度器已启动（%s 个任务，30s 轮询）", n)
         except Exception as e:
-            import sys
-            print(f"[chat_bridge] 启动自动化调度器失败（不影响主 UI）: {e}",
-                  file=sys.stderr, flush=True)
+            # silent-WARN: 调度器启动失败由 main._safe_start_scheduler 兜底 toast
+            logger.warning("启动自动化调度器失败（不影响主 UI）: %s", e)
 
     @pyqtSlot()
     def show_automation_manager_dialog(self):
@@ -126,9 +131,8 @@ class MenuMixin(object):
             n = len(getattr(host.scheduler, "automations", []) or [])
             self.toast.emit(f"任务管理已关闭（{n} 个任务）")
         except Exception as e:
-            print(f"[chat_bridge] show_automation_manager 失败: {e}")
-            import traceback
-            traceback.print_exc()
+            # must-log-ERROR: 对话框打开是用户主动行为，失败需留痕
+            logger.exception("show_automation_manager 失败: %s", e)
             self.toast.emit(f"打开自动化管理失败: {e}")
 
     @pyqtSlot()
@@ -147,5 +151,6 @@ class MenuMixin(object):
             host.scheduler.check_due()
             self.toast.emit("已触发到期任务检查")
         except Exception as e:
-            print(f"[chat_bridge] run_automation_check_due 失败: {e}")
+            # silent-WARN: 检查失败 toast 已发
+            logger.warning("run_automation_check_due 失败: %s", e)
             self.toast.emit(f"检查任务失败: {e}")

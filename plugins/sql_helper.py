@@ -9,6 +9,7 @@
 工具：db_connect 配置并测试连接、db_list_tables 列出表、
 db_schema 查看表结构、db_query 执行查询（默认只读）。
 """
+import logging
 import os
 import json
 import re
@@ -50,6 +51,10 @@ _WRITE_KEYWORDS = {
     "REINDEX", "REANALYZE", "ANALYZE", "CLUSTER", "RENAME", "COMMENT",
     "CALL", "SET", "RESET",
 }
+
+
+# Day 20.10.10 P1+P2: 用 stdlib logger 替代 print
+logger = logging.getLogger("qwen_app.plugins.sql_helper")
 
 
 def _strip_sql_comments(sql):
@@ -156,7 +161,7 @@ def _save_cfg(path=None):
         from plugins import _secret_store
     except Exception as e:                # noqa: BLE001 — 降级必须可控，但要留痕
         _secret_store = None
-        print(f"[sql_helper] _secret_store 不可用，密码无法存入凭据库: {e}")
+        logger.warning("[sql_helper] _secret_store 不可用，密码无法存入凭据库: %s", e)
 
     sanitized = {}
     for name, cfg in _CFG.items():
@@ -167,7 +172,7 @@ def _save_cfg(path=None):
                 try:
                     _secret_store.set_secret("sql", name, pw)
                 except Exception as e:
-                    print(f"[sql_helper] keyring 写密码失败，回退存磁盘: {e}")
+                    logger.warning("[sql_helper] keyring 写密码失败，回退存磁盘: %s", e)
                     c["password"] = pw          # 降级：明文存盘，绝不丢 Key
             elif pw:
                 # keyring 不可用 → 密码不能丢；明文存盘
@@ -181,7 +186,8 @@ def _save_cfg(path=None):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
     except Exception as e:                # noqa: BLE001
-        print(f"[sql_helper] 连接配置写盘失败: {e}")
+        # must-log-ERROR: 连接配置写盘失败 → 用户连接全丢
+        logger.error("[sql_helper] 连接配置写盘失败: %s", e)
 
 
 def _safe_sqlite_path(path):

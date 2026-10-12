@@ -66,6 +66,7 @@ def _dir_writable(path):
         os.remove(probe)
         return True
     except Exception:
+        # silent-OK: 探测不可写是真结果（外部观察），无需告警
         return False
 
 
@@ -175,6 +176,7 @@ def ensure_external_plugins():
                 copied += 1
         return copied, ext
     except Exception:
+        # silent-OK: 释放失败不阻塞启动（用户继续用 exe 同级原状）
         return 0, ext
 
 
@@ -195,6 +197,7 @@ def plugins_dir():
             if any(f.endswith(".py") for f in os.listdir(ext)):
                 return ext
         except Exception:
+            # silent-OK: 外部目录不可读，回退到 builtin
             pass
     return builtin_plugins_dir()
 
@@ -217,5 +220,6 @@ def scan_plugin_names():
                     if name not in names:
                         names.append(name)
         except Exception:
+            # silent-OK: 单目录扫描失败 → 继续看其它目录
             pass
     return names

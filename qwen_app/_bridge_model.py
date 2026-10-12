@@ -12,6 +12,9 @@ from PyQt5.QtCore import pyqtSlot
 
 from . import config as _config
 from ._safe_path import is_safe_to_read  # Day 19.1: 路径安全检查（DRY）
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.bridge.model")
 
 
 def _new_model_id():
@@ -58,7 +61,8 @@ class ModelMixin(object):
                 self.currentModelNameChanged.emit(self._last_model_name)
             return True
         except Exception as e:
-            print(f"[chat_bridge] set_current_model 失败: {e}")
+            # silent-WARN: 切换失败已 silently 失败（slot 返回 False），留痕
+            logger.warning("set_current_model 失败: %s", e)
             return False
 
     @pyqtSlot(result=str)
@@ -82,7 +86,7 @@ class ModelMixin(object):
         try:
             models, cur = _config.load_models()
         except Exception as e:
-            print(f"[chat_bridge] add_model 读 models 失败: {e}")
+            logger.warning("add_model 读 models 失败: %s", e)
             return False
         new_m = {
             "id": _new_model_id(),
@@ -99,7 +103,8 @@ class ModelMixin(object):
         try:
             _config.save_models(models, cur)
         except Exception as e:
-            print(f"[chat_bridge] add_model 写盘失败: {e}")
+            # must-log-ERROR: 模型注册表写盘失败 → 用户新增的模型消失
+            logger.error("add_model 写盘失败: %s", e)
             return False
         # 若新增并设为当前 → 同步内存中的模型名
         if cur == new_m["id"]:
@@ -134,7 +139,7 @@ class ModelMixin(object):
         try:
             models, cur = _config.load_models()
         except Exception as e:
-            print(f"[chat_bridge] update_model 读 models 失败: {e}")
+            logger.warning("update_model 读 models 失败: %s", e)
             return False
         target = next((m for m in models if m.get("id") == target_id), None)
         if not target:
@@ -147,7 +152,8 @@ class ModelMixin(object):
         try:
             _config.save_models(models, cur)
         except Exception as e:
-            print(f"[chat_bridge] update_model 写盘失败: {e}")
+            # must-log-ERROR: 模型注册表写盘失败 → 编辑未生效
+            logger.error("update_model 写盘失败: %s", e)
             return False
         # 改的是当前激活模型 → 同步 _last_model_name + emit
         if cur == target_id:
@@ -176,7 +182,7 @@ class ModelMixin(object):
         try:
             models, cur = _config.load_models()
         except Exception as e:
-            print(f"[chat_bridge] delete_model 读 models 失败: {e}")
+            logger.warning("delete_model 读 models 失败: %s", e)
             return False
         if len(models) <= 1:
             return False
@@ -193,7 +199,8 @@ class ModelMixin(object):
         try:
             _config.save_models(models, cur)
         except Exception as e:
-            print(f"[chat_bridge] delete_model 写盘失败: {e}")
+            # must-log-ERROR: 模型注册表写盘失败
+            logger.error("delete_model 写盘失败: %s", e)
             return False
         if fallback_changed:
             try:
@@ -241,7 +248,8 @@ class ModelMixin(object):
             self._enable_context = bool(enable_context)
             return True
         except Exception as e:
-            print(f"[chat_bridge] set_preferences 失败: {e}")
+            # silent-WARN: 偏好写盘失败 silently 返回 False，留痕
+            logger.warning("set_preferences 失败: %s", e)
             return False
 
     @pyqtSlot(result='QVariantMap')
@@ -271,7 +279,8 @@ class ModelMixin(object):
             self._enable_context = bool(enable)
             return True
         except Exception as e:
-            print(f"[chat_bridge] set_enable_context 失败: {e}")
+            # silent-WARN: 同 set_preferences
+            logger.warning("set_enable_context 失败: %s", e)
             return False
 
     def _apply_expert(self, expert_id: str) -> bool:
@@ -294,7 +303,8 @@ class ModelMixin(object):
             cfg["current_expert"] = expert_id
             _config.save_config(cfg)
         except Exception as e:
-            print(f"[chat_bridge] 持久化 current_expert 失败: {e}")
+            # silent-WARN: 当前专家持久化失败 → 下次启动回退到 general，但当前对话仍生效
+            logger.warning("持久化 current_expert 失败: %s", e)
         try:
             self.expertChanged.emit(expert_id)
         except Exception:

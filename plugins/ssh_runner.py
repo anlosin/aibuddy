@@ -19,6 +19,7 @@
 import os
 import re
 import json
+import logging
 
 PLUGIN_INFO = {
     "name": "ssh_runner",
@@ -70,6 +71,9 @@ from plugins._cmd_blocklist import (      # noqa: E402
 _CLIENTS = {}
 # 连接配置缓存
 _CFG = {}
+
+# Day 20.10.10 P1+P2: 用 stdlib logger 替代 print
+logger = logging.getLogger("qwen_app.plugins.ssh_runner")
 
 
 def _conn_file_path():
@@ -135,7 +139,7 @@ def _save_cfg(path=None):
         from plugins import _secret_store
     except Exception as e:                # noqa: BLE001 — 降级必须可控，但要留痕
         _secret_store = None
-        print(f"[ssh_runner] _secret_store 不可用，密码无法存入凭据库: {e}")
+        logger.warning("[ssh_runner] _secret_store 不可用，密码无法存入凭据库: %s", e)
 
     sanitized = {}
     for name, cfg in _CFG.items():
@@ -148,7 +152,7 @@ def _save_cfg(path=None):
                 try:
                     _secret_store.set_secret("ssh", name, pw)
                 except Exception as e:
-                    print(f"[ssh_runner] keyring 写密码失败，回退存磁盘: {e}")
+                    logger.warning("[ssh_runner] keyring 写密码失败，回退存磁盘: %s", e)
                     c["password"] = pw          # 回退：明文存盘，绝不丢 Key
             elif pw:
                 # keyring 不可用 → 密码不能丢；明文存盘（与 config._sanitize_api_keys 同策略）
@@ -157,7 +161,7 @@ def _save_cfg(path=None):
                 try:
                     _secret_store.set_secret("ssh", f"{name}#keypass", kp)
                 except Exception as e:
-                    print(f"[ssh_runner] keyring 写私钥口令失败，回退存磁盘: {e}")
+                    logger.warning("[ssh_runner] keyring 写私钥口令失败，回退存磁盘: %s", e)
                     c["key_passphrase"] = kp
             elif kp:
                 c["key_passphrase"] = kp
@@ -170,7 +174,8 @@ def _save_cfg(path=None):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
     except Exception as e:                # noqa: BLE001
-        print(f"[ssh_runner] 连接配置写盘失败: {e}")
+        # must-log-ERROR: 连接配置写盘失败 → 用户 SSH 连接全丢
+        logger.error("[ssh_runner] 连接配置写盘失败: %s", e)
 
 
 def _get_client(name):

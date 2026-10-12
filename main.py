@@ -13,6 +13,7 @@ Day 9: 默认走 QtQuick UI（QML）。若 QML 加载失败 → fallback 到 PyQ
     python main.py --pyqt5        # 强制用 PyQt5 ChatWindow
     python main.py --qtquick      # 默认（仅为明确语义）
 """
+import logging
 import os
 import sys
 
@@ -35,6 +36,11 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="jieba.*")
 
 # ── Day 20.6.13 打包支持：下面两步必须**先于**任何其他 qwen_app 导入 ──
 from qwen_app import paths
+from qwen_app.log import get_logger, init_logging  # Day 20.10.10 P1+P2: 统一 logger
+
+
+# 顶层 logger（main.py 用，命名约定 qwen_app.main）
+logger = get_logger("qwen_app.main")
 
 
 class _NullStream:
@@ -121,6 +127,10 @@ paths.ensure_external_plugins()
 # 2) 无控制台时兜住 stdout/stderr，必须赶在任何输出之前。
 _install_stream_guard()
 
+# 3) Day 20.10.10 P1+P2: 初始化统一 logger（紧跟 stream_guard；幂等）。
+# 必须在 QApplication 之前 —— 让所有 import 期异常也能走 logger。
+init_logging()
+
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtWidgets import QApplication
@@ -196,7 +206,7 @@ def run_qtquick(app):
     try:
         engine = QQmlApplicationEngine()
         engine.warnings.connect(
-            lambda warns: [print("QML WARN:", w.toString(), file=sys.stderr) for w in warns])
+            lambda warns: [logger.warning("QML WARN: %s", w.toString()) for w in warns])
 
         # Day 20.6.20: theme=None → 从 cfg["theme"] 读持久化偏好（缺省 light）
         bridge = ChatBridge()
@@ -213,13 +223,15 @@ def run_qtquick(app):
 
         roots = engine.rootObjects()
         if not roots:
-            print("[main] QtQuick UI 加载失败，fallback 到 PyQt5", file=sys.stderr)
+            # silent-WARN: fallback 走 PyQt5 ChatWindow，不影响主路径
+            logger.warning("[main] QtQuick UI 加载失败，fallback 到 PyQt5")
             _KEEP_ALIVE.pop("engine", None)   # 别让 fallback 一直拎着这个失败的 engine
             _KEEP_ALIVE.pop("bridge", None)
             return False
         win = roots[0]
         if not win.property("visible"):
             win.setProperty("visible", True)
+        # 启动横幅 —— 用户首屏信号，按架构师决策保留 print
         print("[main] QtQuick UI 已启动", flush=True)
         print(f"[main] bridge.isBusy = {bridge.isBusy}, 当前会话 = {bridge._current_conv_id}", flush=True)
         print(f"[main] 当前模型 = {bridge._last_model_name}", flush=True)
@@ -234,9 +246,8 @@ def run_qtquick(app):
         QTimer.singleShot(0, lambda: _safe_start_scheduler(bridge))
         return True
     except Exception as e:
-        print(f"[main] QtQuick 启动异常: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc()
+        # must-log-ERROR: QtQuick 启动异常必须留痕
+        logger.exception("[main] QtQuick 启动异常: %s", e)
         return False
 
 
@@ -244,9 +255,10 @@ def _safe_enable_watcher(bridge):
     """Day 16: 延迟到事件循环启动后再启用插件 watcher（避开启动竞态）"""
     try:
         bridge.enable_plugin_watcher()
-        print("[main] 插件 watcher 已启用", flush=True)
+        logger.info("[main] 插件 watcher 已启用")
     except Exception as e:
-        print(f"[main] 插件 watcher 启动失败（不影响主 UI）: {e}", file=sys.stderr, flush=True)
+        # silent-WARN: 不影响主 UI，但应留痕
+        logger.warning("[main] 插件 watcher 启动失败（不影响主 UI）: %s", e)
 
 
 def _safe_start_scheduler(bridge):
@@ -259,13 +271,14 @@ def _safe_start_scheduler(bridge):
     try:
         bridge.start_automation_scheduler()
     except Exception as e:
-        print(f"[main] 自动化调度器启动失败（不影响主 UI）: {e}", file=sys.stderr, flush=True)
+        # silent-WARN: 同上
+        logger.warning("[main] 自动化调度器启动失败（不影响主 UI）: %s", e)
 
 
 def run_pyqt5(app):
     """Fallback 路径：原 PyQt5 ChatWindow"""
     from qwen_app.chat_window import ChatWindow
-    print("[main] 走 PyQt5 ChatWindow (原始路径)", file=sys.stderr)
+    logger.info("[main] 走 PyQt5 ChatWindow (原始路径)")
     window = ChatWindow()
     window.show()
     _KEEP_ALIVE["window"] = window    # 同上：局部变量会被 GC，窗口随之消失
@@ -284,9 +297,11 @@ def _safe_migrate_api_keys():
         from qwen_app.config import migrate_api_keys_to_keyring
         moved, detail = migrate_api_keys_to_keyring()
         if moved:
+            # 用户首屏信号 —— 按架构师决策保留 print
             print(f"[main] API Key 已迁移到系统凭据库（{detail}）", flush=True)
     except Exception as e:
-        print(f"[main] API Key 迁移跳过（不影响启动）: {e}", file=sys.stderr, flush=True)
+        # silent-WARN: 迁移失败绝不阻塞启动
+        logger.warning("[main] API Key 迁移跳过（不影响启动）: %s", e)
 
 
 def _run_selftest():

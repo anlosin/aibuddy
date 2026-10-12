@@ -11,6 +11,9 @@ import os
 from PyQt5.QtCore import pyqtSlot
 
 from . import config as _config
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.bridge.bubble")
 
 
 # ============ Day 20: 气泡操作 Slot（被 MessageBubble 三点菜单 / Main MenuBar 触发）============
@@ -36,7 +39,8 @@ class BubbleMixin(object):
             cb.setText(text)
             self._toast("已复制")
         except Exception as e:
-            print(f"[chat_bridge] copy_to_clipboard 失败: {e}")
+            # silent-WARN: 复制失败 toast 已发，留痕便于排查
+            logger.warning("copy_to_clipboard 失败: %s", e)
             self._toast("复制失败")
 
     @pyqtSlot(str)
@@ -49,7 +53,8 @@ class BubbleMixin(object):
             QGuiApplication.clipboard().setText(code)
             self._toast("代码已复制")
         except Exception as e:
-            print(f"[chat_bridge] copy_code 失败: {e}")
+            # silent-WARN: 同上
+            logger.warning("copy_code 失败: %s", e)
             self._toast("复制失败")
 
     @pyqtSlot(int, result=bool)
@@ -79,10 +84,11 @@ class BubbleMixin(object):
             _config.save_single_conversation(conv, self._current_conv_id)
             self.bubbleDeleted.emit(msg_index)
             self._toast("消息已删除")
-            print(f"[chat_bridge] delete_bubble idx={msg_index} role={deleted_role}")
+            logger.info("delete_bubble idx=%s role=%s", msg_index, deleted_role)
             return True
         except Exception as e:
-            print(f"[chat_bridge] delete_bubble 失败: {e}")
+            # silent-WARN: 删除失败 toast 已发，留痕便于排查
+            logger.warning("delete_bubble 失败: %s", e)
             self._toast("删除失败")
             return False
 
@@ -126,10 +132,11 @@ class BubbleMixin(object):
             # 重渲染整个会话（最简单）
             self.sessionLoaded.emit(self._current_conv_id, history)
             self._toast("消息已编辑")
-            print(f"[chat_bridge] edit_user_message idx={msg_index} new_len={len(new_content)}")
+            logger.info("edit_user_message idx=%s new_len=%s", msg_index, len(new_content))
             return True
         except Exception as e:
-            print(f"[chat_bridge] edit_user_message 失败: {e}")
+            # silent-WARN: 编辑失败 toast 已发
+            logger.warning("edit_user_message 失败: %s", e)
             self._toast("编辑失败")
             return False
 
@@ -181,10 +188,11 @@ class BubbleMixin(object):
             # 触发新一轮生成
             self._do_regenerate(prev_user_text)
             self._toast("正在重新生成...")
-            print(f"[chat_bridge] regenerate_ai_response msg_idx={msg_index} user_idx={prev_user_idx}")
+            logger.info("regenerate_ai_response msg_idx=%s user_idx=%s", msg_index, prev_user_idx)
             return True
         except Exception as e:
-            print(f"[chat_bridge] regenerate_ai_response 失败: {e}")
+            # silent-WARN: 重新生成失败 toast 已发
+            logger.warning("regenerate_ai_response 失败: %s", e)
             self._toast("重新生成失败")
             return False
 
@@ -228,10 +236,12 @@ class BubbleMixin(object):
                 except Exception:
                     pass
             # 非 Windows 或 SAPI 不可用：退化为打印
-            print(f"[TTS] {text_clean}")
+            # P1+P2 重构：TTS 退化路径的「打印到日志」语义保留，但走 logger
+            logger.info("[TTS] %s", text_clean)
             self._toast("TTS 不可用，已打印到日志")
         except Exception as e:
-            print(f"[chat_bridge] speak_text 失败: {e}")
+            # silent-WARN: TTS 失败 toast 已发
+            logger.warning("speak_text 失败: %s", e)
             self._toast("朗读失败")
 
     @pyqtSlot(int, result=str)
@@ -273,10 +283,11 @@ class BubbleMixin(object):
             except Exception:
                 pass
             self._toast(f"已导出 → {fname}")
-            print(f"[chat_bridge] share_bubble -> {out_path}")
+            logger.info("share_bubble -> %s", out_path)
             return out_path
         except Exception as e:
-            print(f"[chat_bridge] share_bubble 失败: {e}")
+            # silent-WARN: 导出失败 toast 已发
+            logger.warning("share_bubble 失败: %s", e)
             self._toast("导出失败")
             return ""
 

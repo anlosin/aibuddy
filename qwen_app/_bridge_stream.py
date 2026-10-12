@@ -14,6 +14,9 @@ from PyQt5.QtCore import pyqtSlot, QTimer
 from .worker import WorkerThread
 from . import config as _config
 from . import chat_render
+from .log import get_logger  # Day 20.10.10 P1+P2: print → logger 统一
+
+logger = get_logger("qwen_app.bridge.stream")
 
 
 class StreamMixin(object):
@@ -44,7 +47,8 @@ class StreamMixin(object):
         try:
             convs, _ = _config.load_conversations()
         except Exception as e:
-            print(f"[chat_bridge] _collect_history_for_context 加载失败: {e}")
+            # silent-WARN: 历史加载失败 → 本轮走单轮对话，不阻塞消息流
+            logger.warning("_collect_history_for_context 加载失败: %s", e)
             return []
         conv = next((c for c in convs if c.get("id") == conv_id), None)
         if conv is None:
@@ -124,7 +128,8 @@ class StreamMixin(object):
                     )
                     self._last_model_name = model_name
             except Exception as e:
-                print(f"[chat_bridge] 读取 config 失败: {e}，降级到 fake client")
+                # silent-WARN: 读配置失败 → 降级 fake client，不阻塞消息流
+                logger.warning("读取 config 失败: %s，降级到 fake client", e)
 
         if client is None:
             client = _make_fake_openai_client(user_text)

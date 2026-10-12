@@ -1,0 +1,203 @@
+%% qwen Logging 重构 — Class Diagram
+%% 角色：Bob（架构师）｜Day 20.10.10
+
+classDiagram
+    %% ── qwen_app.log 模块 ──
+    class LogFactory {
+        <<module: qwen_app.log>>
+        +get_logger(name: str) Logger
+        +init_logging(level: str|int|None) void
+        +is_test_env() bool
+        -_init_done: bool
+        -_root_name: str = "qwen"
+    }
+
+    class LoggerProtocol {
+        <<stdlib logging.Logger>>
+        +name: str
+        +level: int
+        +handlers: list
+        +info(msg, *args) void
+        +warning(msg, *args) void
+        +error(msg, *args) void
+        +exception(msg, *args) void
+        +debug(msg, *args) void
+    }
+
+    class RotatingFileHandler {
+        <<stdlib handlers.RotatingFileHandler>>
+        +maxBytes: int = 5MB
+        +backupCount: int = 5
+        +filename: str
+        +formatter: Formatter
+        +doRollover() void
+    }
+
+    class StreamHandler {
+        <<stdlib StreamHandler>>
+        +stream: stderr
+        +level: int = WARNING
+        +formatter: Formatter
+    }
+
+    class Formatter {
+        <<stdlib Formatter>>
+        +fmt: str = "%(asctime)s %(levelname)s %(name)s | %(message)s"
+        +datefmt: str = "%Y-%m-%d %H:%M:%S"
+    }
+
+    %% ── 业务模块（使用 logger 的角色）──
+    class BusinessModule {
+        <<abstract>>
+        +logger: Logger
+        +do_work() void
+    }
+
+    class SchedulerModule {
+        <<qwen_app.scheduler>>
+        +from .log import get_logger
+        +logger = get_logger("qwen_app.scheduler")
+        +save_automations() void
+        +save_runs_index() void
+        +is_due() bool
+        +_record() void
+    }
+
+    class ChatBridge {
+        <<qwen_app.chat_bridge>>
+        +logger = get_logger("qwen_app.chat_bridge")
+        +set_theme() void
+    }
+
+    class BridgeBubbleMixin {
+        <<qwen_app._bridge_bubble>>
+        +logger = get_logger("qwen_app.bridge.bubble")
+        +copy_to_clipboard() void
+        +delete_bubble() void
+        +edit_user_message() void
+        +regenerate_ai_response() void
+        +share_bubble() void
+    }
+
+    class BridgeSendMixin {
+        <<qwen_app._bridge_send>>
+        +logger = get_logger("qwen_app.bridge.send")
+        +send_message() void
+        +_append_history() void
+        +_build_user_content() void
+    }
+
+    class BridgeModelMixin {
+        <<qwen_app._bridge_model>>
+        +logger = get_logger("qwen_app.bridge.model")
+        +set_current_model() void
+        +add_model() void
+        +update_model() void
+        +delete_model() void
+        +set_preferences() void
+        +_apply_expert() void
+    }
+
+    class BridgePluginMixin {
+        <<qwen_app._bridge_plugin>>
+        +logger = get_logger("qwen_app.bridge.plugin")
+        +_init_plugin_watcher() void
+        +reload_plugins() void
+        +_do_reload_plugins() void
+    }
+
+    class BridgeMenuMixin {
+        <<qwen_app._bridge_menu>>
+        +logger = get_logger("qwen_app.bridge.menu")
+        +show_settings_dialog() void
+        +start_automation_scheduler() void
+        +run_automation_check_due() void
+    }
+
+    class BridgeStreamMixin {
+        <<qwen_app._bridge_stream>>
+        +logger = get_logger("qwen_app.bridge.stream")
+        +start_real_chat() void
+        +_collect_history_for_context() void
+    }
+
+    class PluginManager {
+        <<qwen_app.plugin_manager>>
+        +logger = get_logger("qwen_app.plugin_manager")
+        +discover_plugins() dict
+        +dispatch_tool() str
+    }
+
+    class PluginSshRunner {
+        <<plugins.ssh_runner>>
+        +logger = get_logger("qwen_app.plugins.ssh_runner")
+        +execute() str
+        +_save_cfg() void
+    }
+
+    class PluginSqlHelper {
+        <<plugins.sql_helper>>
+        +logger = get_logger("qwen_app.plugins.sql_helper")
+        +execute() str
+        +_save_cfg() void
+    }
+
+    class PluginWebSearch {
+        <<plugins.web_search>>
+        +logger = get_logger("qwen_app.plugins.web_search")
+        +execute() str
+    }
+
+    class SecretStore {
+        <<plugins._secret_store>>
+        +logger = get_logger("qwen_app.plugins._secret_store")
+        +set_secret() void
+        +get_secret() str
+    }
+
+    class Main {
+        <<main.py>>
+        +logger = get_logger("qwen_app.main")
+        +_install_stream_guard() void
+        +run_qtquick() bool
+        +_safe_enable_watcher() void
+        +_safe_start_scheduler() void
+        +_run_selftest() int
+    }
+
+    %% ── 关系 ──
+    LogFactory ..> LoggerProtocol : creates via get_logger
+    LoggerProtocol o-- RotatingFileHandler : root has 1 file handler
+    LoggerProtocol o-- StreamHandler : root has 1 stderr handler
+    RotatingFileHandler --> Formatter : uses
+    StreamHandler --> Formatter : uses
+
+    BusinessModule <|-- SchedulerModule
+    BusinessModule <|-- ChatBridge
+    BusinessModule <|-- BridgeBubbleMixin
+    BusinessModule <|-- BridgeSendMixin
+    BusinessModule <|-- BridgeModelMixin
+    BusinessModule <|-- BridgePluginMixin
+    BusinessModule <|-- BridgeMenuMixin
+    BusinessModule <|-- BridgeStreamMixin
+    BusinessModule <|-- PluginManager
+    BusinessModule <|-- PluginSshRunner
+    BusinessModule <|-- PluginSqlHelper
+    BusinessModule <|-- PluginWebSearch
+    BusinessModule <|-- SecretStore
+    BusinessModule <|-- Main
+
+    SchedulerModule ..> LogFactory : get_logger("qwen_app.scheduler")
+    ChatBridge ..> LogFactory : get_logger("qwen_app.chat_bridge")
+    BridgeBubbleMixin ..> LogFactory : get_logger("qwen_app.bridge.bubble")
+    BridgeSendMixin ..> LogFactory : get_logger("qwen_app.bridge.send")
+    BridgeModelMixin ..> LogFactory : get_logger("qwen_app.bridge.model")
+    BridgePluginMixin ..> LogFactory : get_logger("qwen_app.bridge.plugin")
+    BridgeMenuMixin ..> LogFactory : get_logger("qwen_app.bridge.menu")
+    BridgeStreamMixin ..> LogFactory : get_logger("qwen_app.bridge.stream")
+    PluginManager ..> LogFactory : get_logger("qwen_app.plugin_manager")
+    PluginSshRunner ..> LogFactory : get_logger("qwen_app.plugins.ssh_runner")
+    PluginSqlHelper ..> LogFactory : get_logger("qwen_app.plugins.sql_helper")
+    PluginWebSearch ..> LogFactory : get_logger("qwen_app.plugins.web_search")
+    SecretStore ..> LogFactory : get_logger("qwen_app.plugins._secret_store")
+    Main ..> LogFactory : get_logger("qwen_app.main")

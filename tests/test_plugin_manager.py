@@ -211,14 +211,16 @@ class TestDispatchTool(_TmpPluginDir):
         self.assertNotIn("Traceback", r)
 
     def test_tools_without_execute_is_skipped_with_warning(self):
-        """坏插件应留下告警，不能"神秘消失"（用户反馈过插件莫名不在列表里）"""
-        import io
-        import contextlib
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        """坏插件应留下告警，不能"神秘消失"（用户反馈过插件莫名不在列表里）
+
+        Day 20.10.10 P1+P2 重构后：告警从 print() 改为 logger.warning()，
+        测试改用 assertLogs 抓 log，不依赖 stdout。
+        """
+        with self.assertLogs("qwen_app.plugin_manager", level="WARNING") as cm:
             plugins, _ = plugin_manager.discover_plugins(plugin_dir=self.tmp)
         self.assertNotIn("hollow", plugins)
-        self.assertIn("hollow", buf.getvalue(),
+        joined = "\n".join(cm.output)
+        self.assertIn("hollow", joined,
                       "声明了 TOOLS 却没有 execute 的插件必须告警，不能静默丢弃")
 
     def test_system_prompts_collected(self):

@@ -351,14 +351,18 @@ class TestAutomationSlotSuccessToast(unittest.TestCase):
                       "show_automation_manager_dialog 必须有「任务管理已关闭」成功 toast")
 
     def test_failure_path_has_traceback(self):
-        """except 分支必须 print traceback（用户能看到完整堆栈）"""
+        """except 分支必须带 traceback（用户能看到完整堆栈）
+
+        Day 20.10.10 P1+P2 重构后：traceback 由 ``logger.exception(...)`` 自动
+        附加，测试改判 ``logger.exception``，不再判 ``traceback.print_exc()``。
+        """
         m = re.search(
             r"def show_automation_manager_dialog.*?(?=\n    @pyqtSlot|\n    def _get_dialog_host|\Z)",
             self.src, re.DOTALL)
         self.assertIsNotNone(m)
         body = m.group(0)
-        self.assertIn("traceback.print_exc()", body,
-                      "失败时必须 print traceback，不能只 print(e)")
+        self.assertIn("logger.exception", body,
+                      "失败时必须 logger.exception 带 traceback，不能只 logger.error")
 
 
 if __name__ == "__main__":

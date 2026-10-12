@@ -1,0 +1,120 @@
+%% qwen Logging 重构 — Sequence Diagram
+%% 角色：Bob（架构师）｜Day 20.10.10
+
+%% ============================================
+%% 场景 A：main.py 启动（打包态）
+%% ============================================
+sequenceDiagram
+    participant User
+    participant Main as main.py
+    participant Paths as qwen_app.paths
+    participant Log as qwen_app.log
+    participant Sched as qwen_app.scheduler
+    participant Bridge as qwen_app.chat_bridge
+
+    User->>Main: 启动 qwen.exe (--noconsole)
+    Main->>Paths: ensure_external_plugins()
+    Main->>Main: _install_stream_guard()  # stdout/stderr Tee 到 app.log
+    Main->>Log: init_logging()  # 新增：logger 挂 root + file handler + stderr handler
+    Log->>Log: is_test_env() = False (无 PYTEST_CURRENT_TEST 等)
+    Log->>Log: root = getLogger("qwen"), level=INFO
+    Log->>Paths: log_dir() → data/logs
+    Log->>Log: RotatingFileHandler(app.log, 5MB×5) 挂上
+    Log->>Log: StreamHandler(sys.stderr, WARNING) 挂上
+    Main->>Main: QApplication 创建 + QtQuick UI 加载
+    Note over Main: 启动横幅保留 print() (用户首屏信号)
+    Main->>Bridge: ChatBridge()
+    Bridge->>Log: get_logger("qwen_app.chat_bridge")
+    Main->>Bridge: enable_plugin_watcher()
+    Main->>Bridge: start_automation_scheduler()
+    Bridge->>Sched: Scheduler(...)
+    Sched->>Log: get_logger("qwen_app.scheduler")
+    Main->>Main: app.exec_()
+
+
+%% ============================================
+%% 场景 B：业务模块 logger 调用（scheduler / bridge / plugin）
+%% ============================================
+sequenceDiagram
+    participant Caller as Plugin execute() / Scheduler._run_one / Bridge Slot
+    participant Log as qwen_app.log
+    participant Stdlib as logging (stdlib)
+    participant Root as root logger "qwen"
+    participant File as RotatingFileHandler
+    participant Stderr as StreamHandler(stderr)
+
+    Caller->>Log: get_logger("qwen_app.plugins.ssh_runner")
+    Log->>Stdlib: logging.getLogger(name)
+    Stdlib-->>Log: Logger instance (cached)
+    Log-->>Caller: logger
+    Caller->>Caller: try: do_work()
+    Caller->>Caller: except Exception as e:
+    Caller->>Log: logger.exception("connect failed: %s", e)
+    Log->>Stdlib: logger.exception(...)
+    Stdlib->>Root: propagate up to root
+    Root->>File: emit record (level >= INFO → file)
+    File->>File: format + write to app.log
+    Root->>Stderr: emit record (level >= WARNING → stderr)
+    Stderr->>Stderr: print formatted to sys.stderr
+
+
+%% ============================================
+%% 场景 C：测试环境降级（unittest + offscreen）
+%% ============================================
+sequenceDiagram
+    participant Test as run_full_tests.py
+    participant Log as qwen_app.log
+    participant Root as root logger "qwen"
+    participant File as RotatingFileHandler
+    participant Stderr as StreamHandler(stderr)
+    participant Stdout as test stdout
+
+    Test->>Test: unittest.main() 启动
+    Test->>Log: from qwen_app.log import get_logger (import)
+    Log->>Log: 注意：测试未调 init_logging()，所以无 handler 挂载
+    Note over Log: 测试代码只调用 get_logger，不调 init_logging
+    Log-->>Test: logger (子 logger, propagate=True)
+    Test->>Log: logger.info("...")
+    Log->>Root: propagate (level = WARNING inherited from root default)
+    Note over Root: 根 logger 默认 level = WARNING<br/>Python stdlib 默认 root level = WARNING
+    Root->>Root: record level=INFO < WARNING → 丢弃
+    Test->>Stdout: print 输出（保留）
+    Stdout-->>Test: ut_full3.txt 不被 INFO 污染
+
+
+%% ============================================
+%% 场景 D：silent-OK / silent-WARN / must-log-ERROR 三档
+%% ============================================
+sequenceDiagram
+    participant Code as 业务代码
+    participant Logger as logger (子 logger)
+    participant Root as root logger "qwen"
+    participant File as RotatingFileHandler
+    participant Stderr as StreamHandler(stderr)
+
+    rect rgb(230, 245, 230)
+        Note over Code: silent-OK（保留 pass，加注释）
+        Code->>Code: try: cleanup()
+        Code->>Code: except Exception: pass  # 注释：cleanup 失败不阻塞
+        Note right of Code: 不写日志
+    end
+
+    rect rgb(255, 248, 230)
+        Note over Code: silent-WARN（写 WARNING，不带 traceback）
+        Code->>Code: try: parse_schedule(config)
+        Code->>Code: except ValueError as e:
+        Code->>Logger: logger.warning("任务 X 配置异常: %s", e)
+        Logger->>Root: propagate
+        Root->>File: write WARNING 行
+    end
+
+    rect rgb(255, 230, 230)
+        Note over Code: must-log-ERROR（带 traceback）
+        Code->>Code: try: save_automations()
+        Code->>Code: except OSError as e:
+        Code->>Logger: logger.error("保存任务失败: %s", e)
+        Code->>Logger: logger.exception("详细信息")  # 带 traceback
+        Logger->>Root: propagate
+        Root->>File: write ERROR 行 (含 traceback)
+        Root->>Stderr: print 到 stderr (ERROR >= WARNING)
+    end
