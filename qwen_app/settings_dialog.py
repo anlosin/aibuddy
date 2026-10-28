@@ -119,7 +119,8 @@ def _model_edit_form(window, dlg, model=None):
     le_model = QLineEdit(m.get("model_id", ""))
     le_model.setPlaceholderText("qwen-max / gpt-4o / DeepSeek-R1-...")
     le_proxy = QLineEdit(m.get("proxy", ""))
-    le_proxy.setPlaceholderText("http://127.0.0.1:7890（留空=直连）")
+    le_proxy.setPlaceholderText(
+        "socks5h://127.0.0.1:10808 或 http://127.0.0.1:7890（留空=直连）")
     hint = QLabel("思考模式 / 工具调用为全局偏好，请在「菜单→偏好设置」中调整，"
                   "不随单条模型保存。")
     hint.setStyleSheet("color:#8A8F99;")
