@@ -33,12 +33,55 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 # ── 随包分发的只读资源 ──
+def _collect_plugin_datas(root_dir, dest_root):
+    """枚举 plugins/ 下的**真实模板文件**，跳过 __pycache__ 与 *.pyc。
+
+    为什么要手工枚举（而不是一个 (目录, 目标目录) 二元组）：
+        PyInstaller 的 datas 二元组走 build_main.Analysis →
+        format_binaries_and_datas() → os.walk()，**没有排除开关** —— 整个
+        源目录会被原样递归拷进 _internal/。（注：把 Tree 对象塞进 datas
+        也不行，实测直接报 "ValueError: too many values to unpack
+        (expected 2)"，因为 format_binaries_and_datas 只认 (src, dest)
+        二元组。）
+
+    不排除会怎样：
+        源码 plugins/__pycache__/ 下的 28 个 .pyc（274 KB）会被打进
+        _internal/plugins/ —— 而它们是**死重**：
+          · 打包态插件由 importlib.util.spec_from_file_location **动态加载**
+            （见 qwen_app/plugin_manager.py），根本用不到这些 .pyc；
+          · paths.ensure_external_plugins() 释放模板到 exe 同级时显式跳过
+            __pycache__（见 qwen_app/paths.py），用户永远看不到它们。
+        即「占了体积、又不生效」。
+
+    Args:
+        root_dir: 源目录绝对路径（通常是 ROOT/plugins）。
+        dest_root: 目标根目录（相对包内路径，通常是 "plugins"）。
+
+    Returns:
+        list[tuple[str, str]]: (源文件绝对路径, 目标目录) 二元组列表。
+        目标目录形如 "plugins" / "plugins/k8s_templates"，**保持原层级**，
+        与原先整目录拷贝的结果完全一致（只是少了 __pycache__）。
+    """
+    entries = []
+    for cur_dir, sub_dirs, file_names in os.walk(root_dir):
+        # 原地裁剪子目录，避免 os.walk 继续下钻 __pycache__
+        sub_dirs[:] = [d for d in sub_dirs if d != "__pycache__"]
+        rel_dir = os.path.relpath(cur_dir, root_dir)
+        dest_dir = dest_root if rel_dir == "." else os.path.join(dest_root, rel_dir)
+        for name in file_names:
+            if name.endswith(".pyc"):
+                continue
+            entries.append((os.path.join(cur_dir, name), dest_dir))
+    return entries
+
+
 datas = [
     (os.path.join(ROOT, "qwen_app", "qml"),     "qwen_app/qml"),
     (os.path.join(ROOT, "qwen_app", "experts"), "qwen_app/experts"),
     # 内置插件模板（含 k8s_templates/ 子目录）。首启动会被复制到 exe 同级
     # plugins/，用户之后改的是那一份。
-    (os.path.join(ROOT, "plugins"),             "plugins"),
+    # Day 20.10.28: 逐文件登记并排除 __pycache__ / *.pyc（见上函数注释）。
+    *_collect_plugin_datas(os.path.join(ROOT, "plugins"), "plugins"),
     (os.path.join(ROOT, "model_config.example.json"), "."),
 ]
 
